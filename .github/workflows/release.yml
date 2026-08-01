@@ -1,0 +1,76 @@
+name: release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: macos-26
+    strategy:
+      matrix:
+        arch: [arm64, amd64]
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+      - run: go test ./...
+      - name: Build archive
+        env:
+          GOOS: darwin
+          GOARCH: ${{ matrix.arch }}
+        run: |
+          mkdir -p dist
+          go build -trimpath -ldflags "-s -w" -o dist/panestra ./cmd/panestra
+          if [ "$GOARCH" = amd64 ]; then release_arch=x86_64; else release_arch=$GOARCH; fi
+          tar -C dist -czf "panestra-cli_Darwin_${release_arch}.tar.gz" panestra
+      - uses: actions/upload-artifact@v7
+        with:
+          name: release-${{ matrix.arch }}
+          path: panestra-cli_Darwin_*.tar.gz
+
+  publish:
+    needs: build
+    runs-on: macos-26
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: release-*
+          merge-multiple: true
+      - run: shasum -a 256 panestra-cli_Darwin_*.tar.gz > checksums.txt
+      - env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "$GITHUB_REF_NAME" panestra-cli_Darwin_*.tar.gz checksums.txt --generate-notes --verify-tag
+
+  homebrew:
+    needs: publish
+    runs-on: macos-26
+    env:
+      TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+    if: ${{ vars.HOMEBREW_TAP_ENABLED == 'true' }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: release-*
+          merge-multiple: true
+      - name: Update fru180/homebrew-tap
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          git clone "https://x-access-token:${TAP_TOKEN}@github.com/fru180/homebrew-tap.git" tap
+          mkdir -p tap/Formula
+          arm_sha=$(shasum -a 256 panestra-cli_Darwin_arm64.tar.gz | awk '{print $1}')
+          intel_sha=$(shasum -a 256 panestra-cli_Darwin_x86_64.tar.gz | awk '{print $1}')
+          version=${TAG#v}
+          sed -e "s/@VERSION@/$version/g" -e "s/@ARM64_SHA@/$arm_sha/g" -e "s/@X86_64_SHA@/$intel_sha/g" Formula/panestra-cli.rb.tmpl > tap/Formula/panestra-cli.rb
+          cd tap
+          git config user.name github-actions
+          git config user.email github-actions@github.com
+          git add Formula/panestra-cli.rb
+          git commit -m "panestra-cli ${TAG}"
+          git push

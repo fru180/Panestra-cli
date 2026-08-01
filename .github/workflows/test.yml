@@ -1,0 +1,34 @@
+name: test
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    strategy:
+      matrix:
+        os: [macos-26-intel, macos-26]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache: true
+      - run: brew install tmux
+      - run: test -z "$(gofmt -l cmd internal scripts/generate-demo)"
+      - run: go vet ./...
+      - run: go run honnef.co/go/tools/cmd/staticcheck@v0.6.1 ./...
+      - run: go run golang.org/x/vuln/cmd/govulncheck@v1.1.4 ./...
+      - run: go test -race ./...
+      - run: go build ./cmd/panestra
+      - run: sh -n scripts/install.sh scripts/uninstall.sh
+      - name: Validate adapter JSON
+        run: |
+          python3 -m json.tool adapters/codex/hooks/hooks.json >/dev/null
+          python3 -m json.tool adapters/claude/hooks/hooks.json >/dev/null
