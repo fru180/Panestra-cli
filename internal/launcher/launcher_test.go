@@ -1,10 +1,12 @@
 package launcher
 
 import (
+	"bytes"
 	"encoding/base64"
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -38,7 +40,7 @@ func TestExecStatusWritesAgentExitCode(t *testing.T) {
 	payload, _ := json.Marshal([]string{script, "argument"})
 	encoded := base64.RawURLEncoding.EncodeToString(payload)
 	status := filepath.Join(dir, "status")
-	if code := ExecStatus(status, encoded); code != 9 {
+	if code := ExecStatus(status, encoded, ""); code != 9 {
 		t.Fatalf("exit = %d", code)
 	}
 	b, err := os.ReadFile(status)
@@ -47,6 +49,56 @@ func TestExecStatusWritesAgentExitCode(t *testing.T) {
 	}
 	if string(b) != "9" {
 		t.Fatalf("status = %q", b)
+	}
+}
+
+func TestDedicatedConfigEnablesScrollback(t *testing.T) {
+	for _, setting := range []string{
+		"set -g mouse on",
+		"bind-key -n WheelUpPane copy-mode -e \\; send-keys -X -N 5 scroll-up",
+	} {
+		if !strings.Contains(dedicatedConfig, setting+"\n") {
+			t.Fatalf("dedicated config is missing %q", setting)
+		}
+	}
+}
+
+func TestTranscriptSocket(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "history.sock")
+	listener, result, err := listenTranscript(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer listener.Close()
+
+	want := []byte("first line\n日本語の最終出力\n")
+	if err := sendTranscript(path, want); err != nil {
+		t.Fatal(err)
+	}
+	got := <-result
+	if got.err != nil {
+		t.Fatal(got.err)
+	}
+	if !bytes.Equal(got.data, want) {
+		t.Fatalf("transcript = %q, want %q", got.data, want)
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode().Perm() != 0600 {
+		t.Fatalf("socket mode = %o", info.Mode().Perm())
+	}
+}
+
+func TestTranscriptForTerminalRemovesBlankPaneRows(t *testing.T) {
+	got := transcriptForTerminal([]byte("short output\n\n\n"))
+	want := []byte("\x1b[0mshort output\n\x1b[0m")
+	if !bytes.Equal(got, want) {
+		t.Fatalf("terminal transcript = %q, want %q", got, want)
+	}
+	if got := transcriptForTerminal([]byte("\n\n")); got != nil {
+		t.Fatalf("blank transcript = %q", got)
 	}
 }
 
