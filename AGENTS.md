@@ -10,14 +10,24 @@
 
 ```bash
 gofmt -w cmd internal
+test -z "$(gofmt -l cmd internal)"
 go test ./...
 go test -race ./...
 go vet ./...
 go run honnef.co/go/tools/cmd/staticcheck@v0.6.1 ./...
 go run golang.org/x/vuln/cmd/govulncheck@v1.1.4 ./...
 sh -n scripts/*.sh
-go build ./cmd/panestra
+go build -o /tmp/panestra-cli-check ./cmd/panestra
+python3 -m json.tool adapters/codex/hooks/hooks.json >/dev/null
+python3 -m json.tool adapters/claude/hooks/hooks.json >/dev/null
 ```
+
+## Pre-push Verification
+
+- Use the Go toolchain version pinned in `.go-version` for local validation, CI, and release builds. Keep `go.mod` as the minimum source-compatible Go version.
+- Before every push, run all commands in `Development Commands`, inspect `git diff --check`, and confirm `git status` contains only the intended changes.
+- When deleting or renaming files or directories, search the entire repository for stale references, including `.github/workflows`, before committing.
+- Do not rely on CI to discover failures that can be reproduced locally.
 
 ## Architecture
 
