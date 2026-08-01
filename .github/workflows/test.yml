@@ -9,11 +9,8 @@ permissions:
   contents: read
 
 jobs:
-  test:
-    strategy:
-      matrix:
-        os: [macos-26-intel, macos-26]
-    runs-on: ${{ matrix.os }}
+  quality:
+    runs-on: macos-26
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-go@v7
@@ -31,10 +28,25 @@ jobs:
       - run: go vet ./...
       - run: go run honnef.co/go/tools/cmd/staticcheck@v0.6.1 ./...
       - run: go run golang.org/x/vuln/cmd/govulncheck@v1.1.4 ./...
-      - run: go test -race ./...
+      - run: go test ./...
       - run: go build ./cmd/panestra
       - run: sh -n scripts/install.sh scripts/uninstall.sh
       - name: Validate adapter JSON
         run: |
           python3 -m json.tool adapters/codex/hooks/hooks.json >/dev/null
           python3 -m json.tool adapters/claude/hooks/hooks.json >/dev/null
+
+  compatibility:
+    if: github.event_name == 'push' || github.base_ref == 'main'
+    strategy:
+      matrix:
+        os: [macos-26-intel, macos-26]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: .go-version
+          cache: true
+      - run: brew install tmux
+      - run: go test -race ./...
