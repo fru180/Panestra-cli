@@ -70,10 +70,10 @@ func run() int {
 		}
 		return launcher.Launch(os.Args[2], os.Args[3:])
 	case "_exec-status":
-		if len(os.Args) != 4 {
+		if len(os.Args) != 5 {
 			return 126
 		}
-		return launcher.ExecStatus(os.Args[2], os.Args[3])
+		return launcher.ExecStatus(os.Args[2], os.Args[3], os.Args[4])
 	case "version", "--version", "-V":
 		fmt.Println("panestra", config.Version)
 		return 0

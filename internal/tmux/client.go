@@ -68,3 +68,20 @@ func (c Client) ClearPrompt(pane string) error {
 	_, err := c.run("set-option", "-p", "-u", "-t", pane, "@panestra_cli_prompt")
 	return err
 }
+
+func (c Client) CaptureHistory(pane string) ([]byte, error) {
+	if pane == "" {
+		return nil, fmt.Errorf("tmux pane is empty")
+	}
+	var stderr bytes.Buffer
+	cmd := exec.Command(c.Binary, "capture-pane", "-p", "-e", "-J", "-S", "-", "-t", pane)
+	cmd.Stderr = &stderr
+	out, err := cmd.Output()
+	if err != nil {
+		if detail := strings.TrimSpace(stderr.String()); detail != "" {
+			return nil, fmt.Errorf("%w: %s", err, detail)
+		}
+		return nil, err
+	}
+	return out, nil
+}

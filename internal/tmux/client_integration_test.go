@@ -78,3 +78,39 @@ func TestAcquireReleaseRestoresWindow(t *testing.T) {
 		t.Fatalf("active option remains: %q", active)
 	}
 }
+
+func TestCaptureHistoryIncludesScrollbackAndExcludesBorder(t *testing.T) {
+	c, pane := testClient(t)
+	if err := c.Acquire(pane, "Task: ", true); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = c.Release(pane) })
+	if err := c.SetPrompt(pane, "not-pane-output"); err != nil {
+		t.Fatal(err)
+	}
+	command := "i=1; while [ $i -le 40 ]; do echo history-line-$i; i=$((i+1)); done"
+	if _, err := c.run("send-keys", "-t", pane, command, "C-m"); err != nil {
+		t.Fatal(err)
+	}
+
+	var history []byte
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		var err error
+		history, err = c.CaptureHistory(pane)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if strings.Contains(string(history), "history-line-40") {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	got := string(history)
+	if !strings.Contains(got, "history-line-1") || !strings.Contains(got, "history-line-40") {
+		t.Fatalf("history is incomplete: %q", got)
+	}
+	if strings.Contains(got, "Task: not-pane-output") {
+		t.Fatalf("pane border leaked into history: %q", got)
+	}
+}

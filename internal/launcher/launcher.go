@@ -1,9 +1,12 @@
 package launcher
 
 import (
+	"bytes"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"io"
+	"net"
 	"os"
 	"os/exec"
 	"os/signal"
@@ -18,7 +21,20 @@ import (
 	"golang.org/x/term"
 )
 
-const dedicatedConfig = "set -g status off\nset -g pane-border-status top\nset -g pane-border-format '#{?#{@panestra_cli_prompt}, #{@panestra_cli_prefix}#{@panestra_cli_prompt} ,#{?#{@panestra_cli_show_waiting}, Panestra CLI — Waiting for prompt ,}}'\nset -g allow-rename off\nset -g set-titles off\nset -g exit-empty on\n"
+const dedicatedConfig = `set -g status off
+set -g pane-border-status top
+set -g pane-border-format '#{?#{@panestra_cli_prompt}, #{@panestra_cli_prefix}#{@panestra_cli_prompt} ,#{?#{@panestra_cli_show_waiting}, Panestra CLI — Waiting for prompt ,}}'
+set -g mouse on
+bind-key -n WheelUpPane copy-mode -e \; send-keys -X -N 5 scroll-up
+set -g allow-rename off
+set -g set-titles off
+set -g exit-empty on
+`
+
+type transcriptResult struct {
+	data []byte
+	err  error
+}
 
 func Launch(agent string, args []string) int {
 	depth, _ := strconv.Atoi(os.Getenv("PANESTRA_CLI_LAUNCH_DEPTH"))
@@ -108,18 +124,29 @@ func runDedicated(real string, args []string) int {
 		return run(real, args, 1)
 	}
 	defer os.RemoveAll(tmp)
-	conf, status := filepath.Join(tmp, "tmux.conf"), filepath.Join(tmp, "status")
+	conf := filepath.Join(tmp, "tmux.conf")
+	status := filepath.Join(tmp, "status")
+	transcript := filepath.Join(tmp, "history.sock")
 	if err := os.WriteFile(conf, []byte(dedicatedConfig), 0600); err != nil {
 		return run(real, args, 1)
+	}
+	listener, transcriptCh, err := listenTranscript(transcript)
+	if err != nil {
+		transcript = ""
+	} else {
+		defer listener.Close()
 	}
 	payload, _ := json.Marshal(append([]string{real}, args...))
 	encoded := base64.RawURLEncoding.EncodeToString(payload)
 	name := fmt.Sprintf("panestra-cli-%d-%d", os.Getpid(), time.Now().UnixNano())
-	command := shellQuote(self) + " _exec-status " + shellQuote(status) + " " + shellQuote(encoded)
+	command := shellQuote(self) + " _exec-status " + shellQuote(status) + " " + shellQuote(encoded) + " " + shellQuote(transcript)
 	cmd := exec.Command("tmux", "-L", name, "-f", conf, "new-session", "-s", name, command)
 	cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, os.Stdout, os.Stderr
 	cmd.Env = withEnv(os.Environ(), "PANESTRA_CLI_LAUNCH_DEPTH", "1")
 	if err := cmd.Start(); err != nil {
+		if listener != nil {
+			_ = listener.Close()
+		}
 		fmt.Fprintln(os.Stderr, "panestra: dedicated tmux failed; continuing normally:", err)
 		return run(real, args, 1)
 	}
@@ -140,6 +167,15 @@ func runDedicated(real string, args []string) int {
 	signal.Stop(sigs)
 	b, err := os.ReadFile(status)
 	if err == nil {
+		if listener != nil {
+			select {
+			case result := <-transcriptCh:
+				if result.err == nil {
+					writeTranscript(result.data)
+				}
+			case <-time.After(time.Second):
+			}
+		}
 		code, _ := strconv.Atoi(string(b))
 		return code
 	}
@@ -158,7 +194,7 @@ func runDedicated(real string, args []string) int {
 	return 0
 }
 
-func ExecStatus(status, encoded string) int {
+func ExecStatus(status, encoded, transcript string) int {
 	b, err := base64.RawURLEncoding.DecodeString(encoded)
 	if err != nil {
 		return 126
@@ -182,7 +218,70 @@ func ExecStatus(status, encoded string) int {
 	}
 	code := run(argv[0], argv[1:], 1)
 	_ = os.WriteFile(status, []byte(strconv.Itoa(code)), 0600)
+	if transcript != "" {
+		var history []byte
+		if pane != "" {
+			if captured, captureErr := ptmux.New().CaptureHistory(pane); captureErr == nil {
+				history = captured
+			}
+		}
+		_ = sendTranscript(transcript, history)
+	}
 	return code
+}
+
+func listenTranscript(path string) (net.Listener, <-chan transcriptResult, error) {
+	listener, err := net.Listen("unix", path)
+	if err != nil {
+		return nil, nil, err
+	}
+	if err := os.Chmod(path, 0600); err != nil {
+		_ = listener.Close()
+		return nil, nil, err
+	}
+	result := make(chan transcriptResult, 1)
+	go func() {
+		conn, err := listener.Accept()
+		if err != nil {
+			result <- transcriptResult{err: err}
+			return
+		}
+		defer conn.Close()
+		data, err := io.ReadAll(conn)
+		result <- transcriptResult{data: data, err: err}
+	}()
+	return listener, result, nil
+}
+
+func sendTranscript(path string, data []byte) error {
+	conn, err := net.DialTimeout("unix", path, time.Second)
+	if err != nil {
+		return err
+	}
+	defer conn.Close()
+	_ = conn.SetWriteDeadline(time.Now().Add(time.Second))
+	_, err = io.Copy(conn, bytes.NewReader(data))
+	return err
+}
+
+func writeTranscript(data []byte) {
+	data = transcriptForTerminal(data)
+	if len(data) != 0 {
+		_, _ = os.Stdout.Write(data)
+	}
+}
+
+func transcriptForTerminal(data []byte) []byte {
+	data = bytes.TrimRight(data, "\r\n")
+	if len(data) == 0 {
+		return nil
+	}
+	out := make([]byte, 0, len(data)+9)
+	out = append(out, "\x1b[0m"...)
+	out = append(out, data...)
+	out = append(out, '\n')
+	out = append(out, "\x1b[0m"...)
+	return out
 }
 
 func withEnv(env []string, key, value string) []string {
