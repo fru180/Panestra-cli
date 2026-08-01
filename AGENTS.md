@@ -29,6 +29,13 @@ python3 -m json.tool adapters/claude/hooks/hooks.json >/dev/null
 - When deleting or renaming files or directories, search the entire repository for stale references, including `.github/workflows`, before committing.
 - Do not rely on CI to discover failures that can be reproduced locally.
 
+## CI Policy
+
+- Pull requests to `stg` run the quality job once on Apple Silicon: formatting, vet, staticcheck, govulncheck, tests, build, shell validation, and adapter JSON validation.
+- Pushes to `stg` and `main`, plus pull requests targeting `main`, also run race tests on both Apple Silicon and Intel.
+- Keep tmux integration tests path-filtered to tmux, hook, launcher, and asset changes.
+- Do not duplicate architecture-independent quality checks across the OS matrix.
+
 ## Architecture
 
 Panestra CLI consists of one Go binary, `codex` and `claude` shims, and `UserPromptSubmit` hooks for both agents. Interactive launches reuse the current tmux pane or start an isolated tmux server; non-interactive commands execute the agent directly.
