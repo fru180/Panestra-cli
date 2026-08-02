@@ -19,6 +19,7 @@ go run golang.org/x/vuln/cmd/govulncheck@v1.1.4 ./...
 go run github.com/zricethezav/gitleaks/v8@v8.30.1 git --redact --no-banner --verbose
 scripts/generate-third-party-notices.sh
 git diff --exit-code -- THIRD_PARTY_NOTICES
+scripts/verify-release_test.sh
 sh -n scripts/*.sh
 go build -o /tmp/panestra-cli-check ./cmd/panestra
 python3 -m json.tool adapters/codex/hooks/hooks.json >/dev/null
@@ -56,7 +57,7 @@ Setup and uninstall must modify only Panestra CLI-owned hook entries, managed `.
 ## Release Process
 
 - Confirm all development commands above pass, including Terminal.app, iTerm2, Ghostty, Intel Mac, and real-agent smoke tests where available.
-- Confirm `HOMEBREW_TAP_TOKEN` has push access and `HOMEBREW_TAP_ENABLED=true` is configured before publishing through the release workflow.
+- Follow `docs/RELEASE.md`, including the token rotation and release verification procedures.
 - Merge the reviewed feature branch to `main`, then create and push an annotated version tag such as `v0.2.0`.
 - Confirm the workflow publishes arm64 and x86_64 archives plus `checksums.txt`, then updates the Homebrew tap.
 - Smoke-test the release with `brew update`, `brew install fru180/tap/panestra-cli`, `panestra setup`, `panestra doctor`, and `panestra uninstall`.

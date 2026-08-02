@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.1.0 - 2026-08-01
+## 0.1.0 - 2026-08-02
 
 - Add Codex CLI and Claude Code `UserPromptSubmit` adapters.
 - Add transparent tmux launcher and existing-pane restoration.
