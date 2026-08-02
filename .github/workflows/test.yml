@@ -1,0 +1,63 @@
+name: test
+
+on:
+  push:
+    branches: [main, stg]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  quality:
+    runs-on: macos-26
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: .go-version
+          cache: true
+      - name: Scan Git history for secrets
+        run: go run github.com/zricethezav/gitleaks/v8@v8.30.1 git --redact --no-banner --verbose
+      - run: brew install tmux
+      - name: Check formatting
+        run: |
+          unformatted="$(git ls-files -z '*.go' | xargs -0 gofmt -l)"
+          if [[ -n "$unformatted" ]]; then
+            echo "$unformatted"
+            exit 1
+          fi
+      - run: go vet ./...
+      - run: go run honnef.co/go/tools/cmd/staticcheck@v0.6.1 ./...
+      - run: go run golang.org/x/vuln/cmd/govulncheck@v1.1.4 ./...
+      - run: go test ./...
+      - run: go build ./cmd/panestra
+      - name: Verify third-party notices
+        run: |
+          scripts/generate-third-party-notices.sh
+          git diff --exit-code -- THIRD_PARTY_NOTICES
+      - run: sh -n scripts/*.sh
+      - name: Validate adapter JSON
+        run: |
+          python3 -m json.tool adapters/codex/hooks/hooks.json >/dev/null
+          python3 -m json.tool adapters/claude/hooks/hooks.json >/dev/null
+
+  compatibility:
+    if: github.event_name == 'push' || github.base_ref == 'main'
+    strategy:
+      matrix:
+        os: [macos-26-intel, macos-26]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: .go-version
+          cache: true
+      - run: brew install tmux
+      - run: go test -race ./...

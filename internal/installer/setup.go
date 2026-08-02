@@ -1,0 +1,199 @@
+package installer
+
+import (
+	"fmt"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"runtime"
+	"strings"
+
+	"github.com/fru180/Panestra-cli/internal/config"
+	"github.com/fru180/Panestra-cli/internal/launcher"
+)
+
+func Setup() error {
+	if runtime.GOOS != "darwin" && os.Getenv("PANESTRA_CLI_ALLOW_UNSUPPORTED") == "" {
+		return fmt.Errorf("macOS is required (set PANESTRA_CLI_ALLOW_UNSUPPORTED=1 for development)")
+	}
+	if shell := os.Getenv("SHELL"); filepath.Base(shell) != "zsh" && os.Getenv("PANESTRA_CLI_ALLOW_UNSUPPORTED") == "" {
+		if shell == "" {
+			shell = "unknown"
+		}
+		return fmt.Errorf("zsh is required; current shell is %s", shell)
+	}
+	binary, err := os.Executable()
+	if err != nil {
+		return err
+	}
+	binary = stableLauncherPath(binary, os.Getenv("PATH"))
+	agents := []string{}
+	for _, name := range []string{"codex", "claude"} {
+		if _, err := launcher.Resolve(name); err == nil {
+			agents = append(agents, name)
+		}
+	}
+	if len(agents) == 0 {
+		return fmt.Errorf("neither Codex CLI nor Claude Code was found in PATH")
+	}
+	if _, err := exec.LookPath("tmux"); err != nil {
+		fmt.Fprintln(os.Stderr, "warning: tmux was not found; install it with: brew install tmux")
+	}
+	changes, err := prepareSetup(binary, agents)
+	if err != nil {
+		return err
+	}
+	if err := applyFileChanges(changes); err != nil {
+		return err
+	}
+	fmt.Println("Panestra CLI displays your latest prompt on screen.")
+	fmt.Println("Prompts may be visible during screen sharing or recording.")
+	fmt.Println("Setup complete. Run: source ~/.zshrc")
+	fmt.Println()
+	Doctor()
+	return nil
+}
+
+func stableLauncherPath(binary, pathEnv string) string {
+	if absolute, err := filepath.Abs(binary); err == nil {
+		binary = absolute
+	}
+	binary = filepath.Clean(binary)
+	self, err := os.Stat(binary)
+	if err != nil {
+		return binary
+	}
+	// Keep a PATH symlink only when it currently resolves to this executable.
+	// The generated scripts then use that absolute path without a runtime PATH lookup.
+	for _, dir := range filepath.SplitList(pathEnv) {
+		if !filepath.IsAbs(dir) {
+			continue
+		}
+		candidate := filepath.Clean(filepath.Join(dir, "panestra"))
+		info, err := os.Stat(candidate)
+		if err != nil || !info.Mode().IsRegular() || info.Mode()&0111 == 0 || !os.SameFile(self, info) {
+			continue
+		}
+		link, err := os.Lstat(candidate)
+		if err == nil && link.Mode()&os.ModeSymlink != 0 {
+			return candidate
+		}
+	}
+	return binary
+}
+
+func installShims(binary string, agents []string) error {
+	return applyFileChanges(prepareShimChanges(binary, agents))
+}
+
+func prepareShimChanges(binary string, agents []string) []fileChange {
+	var changes []fileChange
+	for _, agent := range agents {
+		shim := "#!/bin/sh\nexec " + shellQuote(binary) + " launch " + agent + " \"$@\"\n"
+		changes = append(changes, fileChange{path: filepath.Join(config.ShimDir(), agent), data: []byte(shim), mode: 0700})
+	}
+	for _, candidate := range []string{"codex", "claude"} {
+		if !hasAgent(agents, candidate) {
+			changes = append(changes, fileChange{path: filepath.Join(config.ShimDir(), candidate), remove: true})
+		}
+	}
+	return changes
+}
+
+func prepareSetup(binary string, agents []string) ([]fileChange, error) {
+	changes := prepareShimChanges(binary, agents)
+	pathChange, err := preparePathBlock()
+	if err != nil {
+		return nil, err
+	}
+	changes = append(changes, pathChange)
+	if _, err := os.Stat(config.Path()); err != nil {
+		if !os.IsNotExist(err) {
+			return nil, err
+		}
+		content, err := config.Encode(config.Default())
+		if err != nil {
+			return nil, err
+		}
+		changes = append(changes, fileChange{path: config.Path(), data: content, mode: 0600})
+	}
+	adapterChanges, err := prepareAdapters(binary, agents)
+	if err != nil {
+		return nil, err
+	}
+	return append(changes, adapterChanges...), nil
+}
+
+func atomicWrite(path string, data []byte, mode os.FileMode) error {
+	writePath, err := resolveAtomicWritePath(path)
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(filepath.Dir(writePath), 0700); err != nil {
+		return fmt.Errorf("create parent directory for %s: %w", path, err)
+	}
+	if info, err := os.Stat(writePath); err == nil {
+		if !info.Mode().IsRegular() {
+			return fmt.Errorf("atomic write target for %s is not a regular file: %s", path, writePath)
+		}
+		mode = info.Mode().Perm()
+	} else if !os.IsNotExist(err) {
+		return fmt.Errorf("inspect atomic write target for %s: %w", path, err)
+	}
+	tmp, err := os.CreateTemp(filepath.Dir(writePath), ".panestra-*")
+	if err != nil {
+		return fmt.Errorf("create temporary file for %s: %w", path, err)
+	}
+	name := tmp.Name()
+	defer os.Remove(name)
+	if _, err = tmp.Write(data); err != nil {
+		tmp.Close()
+		return fmt.Errorf("write temporary file for %s: %w", path, err)
+	}
+	if err = tmp.Chmod(mode); err != nil {
+		tmp.Close()
+		return fmt.Errorf("set mode on temporary file for %s: %w", path, err)
+	}
+	if err = tmp.Close(); err != nil {
+		return fmt.Errorf("close temporary file for %s: %w", path, err)
+	}
+	if err := os.Rename(name, writePath); err != nil {
+		return fmt.Errorf("replace atomic write target for %s: %w", path, err)
+	}
+	return nil
+}
+
+func resolveAtomicWritePath(path string) (string, error) {
+	info, err := os.Lstat(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return path, nil
+		}
+		return "", fmt.Errorf("inspect atomic write path %s: %w", path, err)
+	}
+	if info.Mode()&os.ModeSymlink == 0 {
+		return path, nil
+	}
+	resolved, err := filepath.EvalSymlinks(path)
+	if err != nil {
+		return "", fmt.Errorf("resolve symlink for atomic write %s: %w", path, err)
+	}
+	target, err := os.Stat(resolved)
+	if err != nil {
+		return "", fmt.Errorf("inspect symlink target for atomic write %s: %w", path, err)
+	}
+	if !target.Mode().IsRegular() {
+		return "", fmt.Errorf("symlink target for atomic write %s is not a regular file: %s", path, resolved)
+	}
+	return resolved, nil
+}
+
+func IsShimActive(agent string) bool {
+	p, err := exec.LookPath(agent)
+	if err != nil {
+		return false
+	}
+	a, _ := filepath.EvalSymlinks(p)
+	b, _ := filepath.EvalSymlinks(filepath.Join(config.ShimDir(), agent))
+	return a == b || strings.TrimSpace(a) == strings.TrimSpace(b)
+}
