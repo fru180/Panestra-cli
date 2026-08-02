@@ -3,6 +3,7 @@ package installer
 import (
 	"encoding/json"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -171,6 +172,102 @@ func TestSetupAgentCombinations(t *testing.T) {
 				t.Fatal("Claude adapter missing")
 			}
 		})
+	}
+}
+
+func TestShimsAndHookSurviveLauncherUpgrade(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("PANESTRA_CLI_HOME", home)
+	t.Setenv("CLAUDE_CONFIG_DIR", "")
+
+	root := filepath.Join(t.TempDir(), "prefix with space and 'quote")
+	binDir := filepath.Join(root, "bin")
+	oldVersion := filepath.Join(root, "Cellar", "panestra-cli", "1.0.0")
+	newVersion := filepath.Join(root, "Cellar", "panestra-cli", "1.1.0")
+	oldLauncher := filepath.Join(oldVersion, "bin", "panestra")
+	newLauncher := filepath.Join(newVersion, "bin", "panestra")
+	stableLauncher := filepath.Join(binDir, "panestra")
+	for _, dir := range []string{binDir, filepath.Dir(oldLauncher), filepath.Dir(newLauncher)} {
+		if err := os.MkdirAll(dir, 0700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	writeExecutable(t, oldLauncher, "#!/bin/sh\nprintf 'old launcher must not run\\n' >&2\nexit 99\n")
+	writeExecutable(t, newLauncher, "#!/bin/sh\nprintf '%s\\n' \"$@\"\n")
+	if err := os.Symlink(oldLauncher, stableLauncher); err != nil {
+		t.Fatal(err)
+	}
+
+	hijackDir := t.TempDir()
+	writeExecutable(t, filepath.Join(hijackDir, "panestra"), "#!/bin/sh\nexit 98\n")
+	pathEnv := hijackDir + string(os.PathListSeparator) + binDir
+	launcher := stableLauncherPath(oldLauncher, pathEnv)
+	if launcher != stableLauncher {
+		t.Fatalf("launcher = %q, want stable symlink %q", launcher, stableLauncher)
+	}
+	if err := installShims(launcher, []string{"codex", "claude"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := installAdapters(launcher, []string{"codex", "claude"}); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := os.Remove(stableLauncher); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(newLauncher, stableLauncher); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.RemoveAll(oldVersion); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, agent := range []string{"codex", "claude"} {
+		output, err := exec.Command(filepath.Join(config.ShimDir(), agent), "argument with spaces", "quote'argument").CombinedOutput()
+		if err != nil {
+			t.Fatalf("%s shim failed after upgrade: %v: %s", agent, err, output)
+		}
+		want := "launch\n" + agent + "\nargument with spaces\nquote'argument\n"
+		if string(output) != want {
+			t.Fatalf("%s shim output = %q, want %q", agent, output, want)
+		}
+	}
+	output, err := exec.Command(hookScriptPath()).CombinedOutput()
+	if err != nil {
+		t.Fatalf("hook failed after upgrade: %v: %s", err, output)
+	}
+	if string(output) != "hook\n" {
+		t.Fatalf("hook output = %q, want %q", output, "hook\\n")
+	}
+}
+
+func TestStableLauncherPathSupportsCustomPrefix(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("PANESTRA_CLI_HOME", home)
+	launcher := filepath.Join(t.TempDir(), "custom prefix", "bin", "panestra")
+	if err := os.MkdirAll(filepath.Dir(launcher), 0700); err != nil {
+		t.Fatal(err)
+	}
+	writeExecutable(t, launcher, "#!/bin/sh\nprintf '%s\\n' \"$@\"\n")
+	if got := stableLauncherPath(launcher, filepath.Dir(launcher)); got != launcher {
+		t.Fatalf("launcher = %q, want custom prefix path %q", got, launcher)
+	}
+	if err := installShims(launcher, []string{"codex"}); err != nil {
+		t.Fatal(err)
+	}
+	output, err := exec.Command(filepath.Join(config.ShimDir(), "codex"), "custom argument").CombinedOutput()
+	if err != nil {
+		t.Fatalf("custom prefix shim failed: %v: %s", err, output)
+	}
+	if string(output) != "launch\ncodex\ncustom argument\n" {
+		t.Fatalf("shim output = %q", output)
+	}
+}
+
+func writeExecutable(t *testing.T, path, content string) {
+	t.Helper()
+	if err := os.WriteFile(path, []byte(content), 0700); err != nil {
+		t.Fatal(err)
 	}
 }
 
