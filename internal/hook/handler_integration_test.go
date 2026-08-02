@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/fru180/Panestra-cli/internal/config"
 	"github.com/fru180/Panestra-cli/internal/prompt"
 )
 
@@ -52,6 +53,9 @@ func TestHandleUpdatesOnlyTargetPane(t *testing.T) {
 	t.Setenv("TMUX", socket+",0,0")
 	t.Setenv("TMUX_PANE", ids[0])
 	t.Setenv("PANESTRA_CLI_HOME", t.TempDir())
+	if err := config.Save(config.Default()); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := tmux("resize-window", "-t", "test", "-x", "40"); err != nil {
 		t.Fatal(err)
 	}
@@ -86,6 +90,21 @@ func TestHandleUpdatesOnlyTargetPane(t *testing.T) {
 	}
 	if updated != "追加指示" {
 		t.Fatalf("prompt was not replaced: %q", updated)
+	}
+
+	for _, option := range []string{"@panestra_cli_prompt", "@panestra_cli_prefix"} {
+		if _, err := tmux("set-option", "-pu", "-t", ids[0], option); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.WriteFile(config.Path(), []byte("enabled = false\nauto_tmux = nope\nmax_width = 20\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	Handle(strings.NewReader(`{"hook_event_name":"UserPromptSubmit","prompt":"保存してはいけない"}`))
+	for _, option := range []string{"@panestra_cli_prompt", "@panestra_cli_prefix"} {
+		if value, _ := tmux("show-options", "-pqv", "-t", ids[0], option); value != "" {
+			t.Fatalf("%s was saved for invalid config: %q", option, value)
+		}
 	}
 }
 

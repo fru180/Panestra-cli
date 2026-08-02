@@ -2,6 +2,7 @@ package installer
 
 import (
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -13,13 +14,17 @@ import (
 )
 
 func Doctor() bool {
-	fmt.Println("Panestra CLI Doctor")
+	return doctor(os.Stdout)
+}
+
+func doctor(out io.Writer) bool {
+	fmt.Fprintln(out, "Panestra CLI Doctor")
 	ok := true
 	check := func(good bool, yes, no string) {
 		if good {
-			fmt.Println("✓", yes)
+			fmt.Fprintln(out, "✓", yes)
 		} else {
-			fmt.Println("✗", no)
+			fmt.Fprintln(out, "✗", no)
 			ok = false
 		}
 	}
@@ -42,7 +47,7 @@ func Doctor() bool {
 			}
 			check(adapterInstalled(adapterPath), agent+" adapter is installed", agent+" adapter is missing (run: panestra setup)")
 		} else {
-			fmt.Println("-", agent+" CLI is not installed (optional)")
+			fmt.Fprintln(out, "-", agent+" CLI is not installed (optional)")
 		}
 	}
 	check(found > 0, "at least one supported agent detected", "neither Codex CLI nor Claude Code was found")
@@ -53,7 +58,13 @@ func Doctor() bool {
 		}
 	}
 	check(pathActive, "shim directory is in PATH", "shim directory is not in PATH (run: source ~/.zshrc)")
-	check(config.Load().Enabled, "Panestra CLI is enabled", "Panestra CLI is disabled (run: panestra enable)")
+	cfg, configErr := config.Load()
+	if configErr != nil {
+		check(false, "", fmt.Sprintf("configuration could not be loaded: %v (fix %s, then run: panestra enable)", configErr, config.Path()))
+	} else {
+		check(true, "configuration loaded: "+config.Path(), "")
+		check(cfg.Enabled, "Panestra CLI is enabled", "Panestra CLI is disabled (run: panestra enable)")
+	}
 	if b, err := os.ReadFile(zshrcPath()); err == nil {
 		check(strings.Count(string(b), beginMarker) == 1, "shell configuration is installed once", "shell configuration is missing or duplicated")
 	}

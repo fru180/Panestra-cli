@@ -280,6 +280,25 @@ func contains(values []string, target string) bool {
 	return false
 }
 
+func TestDoctorReportsInvalidConfig(t *testing.T) {
+	t.Setenv("PANESTRA_CLI_HOME", t.TempDir())
+	if err := os.MkdirAll(filepath.Dir(config.Path()), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(config.Path(), []byte("enabled = false\nauto_tmux = nope\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	var output strings.Builder
+	if doctor(&output) {
+		t.Fatal("doctor() = true for invalid config")
+	}
+	for _, want := range []string{"configuration could not be loaded", config.Path(), "toml:"} {
+		if !strings.Contains(output.String(), want) {
+			t.Fatalf("doctor output does not contain %q:\n%s", want, output.String())
+		}
+	}
+}
+
 func TestSetupRemovesStaleAgentConfiguration(t *testing.T) {
 	home, fakeBin := t.TempDir(), t.TempDir()
 	t.Setenv("PANESTRA_CLI_HOME", home)

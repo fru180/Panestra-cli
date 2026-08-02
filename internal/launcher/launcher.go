@@ -47,8 +47,12 @@ func Launch(agent string, args []string) int {
 		fmt.Fprintln(os.Stderr, "panestra:", err)
 		return 127
 	}
-	cfg := config.Load()
+	cfg, configErr := config.Load()
 	interactive := Interactive(agent, args, term.IsTerminal(int(os.Stdin.Fd())), term.IsTerminal(int(os.Stdout.Fd())))
+	if configErr != nil {
+		fmt.Fprintln(os.Stderr, "panestra: configuration unavailable; continuing normally:", configErr)
+		return run(real, args, depth+1)
+	}
 	if !cfg.Enabled || !cfg.AutoTmux || !interactive {
 		return run(real, args, depth+1)
 	}
@@ -211,10 +215,14 @@ func ExecStatus(status, encoded, transcript string) int {
 		}
 	}
 	if pane != "" {
-		cfg := config.Load()
-		client := ptmux.New()
-		_ = client.SetPrefix(pane, prompt.DisplayPrefix(cfg.Prefix))
-		_ = client.SetWaiting(pane, cfg.ShowWaitingMessage)
+		cfg, err := config.Load()
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "panestra: configuration unavailable; display disabled:", err)
+		} else {
+			client := ptmux.New()
+			_ = client.SetPrefix(pane, prompt.DisplayPrefix(cfg.Prefix))
+			_ = client.SetWaiting(pane, cfg.ShowWaitingMessage)
+		}
 	}
 	code := run(argv[0], argv[1:], 1)
 	_ = os.WriteFile(status, []byte(strconv.Itoa(code)), 0600)

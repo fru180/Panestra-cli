@@ -81,6 +81,8 @@ show_waiting_message = true
 
 Environment variables `PANESTRA_CLI_DISABLE`, `PANESTRA_CLI_MAX_WIDTH`, `PANESTRA_CLI_PREFIX`, and `PANESTRA_CLI_DEBUG` override the corresponding settings.
 
+If the configuration file is missing, unreadable, or invalid, Panestra CLI keeps prompt display disabled. Run `panestra doctor` to see the file path and error, repair the file manually, and then run `panestra enable`.
+
 ### Troubleshooting
 
 Start with `panestra doctor`. If an agent shim is not active, reload zsh and confirm that `command -v codex` or `command -v claude` points into `~/.local/share/panestra-cli/shims/`.
@@ -171,6 +173,8 @@ show_waiting_message = true
 ```
 
 環境変数 `PANESTRA_CLI_DISABLE`、`PANESTRA_CLI_MAX_WIDTH`、`PANESTRA_CLI_PREFIX`、`PANESTRA_CLI_DEBUG` で上書きできます。
+
+設定ファイルが存在しない、読み込めない、または不正な場合、Panestra CLI はプロンプト表示を無効のままにします。`panestra doctor` でファイルパスとエラーを確認し、設定を手動で修正してから `panestra enable` を実行してください。
 
 ### トラブルシューティング
 
