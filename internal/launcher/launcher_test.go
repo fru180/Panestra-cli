@@ -4,10 +4,16 @@ import (
 	"bytes"
 	"encoding/base64"
 	"encoding/json"
+	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
+	"time"
+
+	"github.com/fru180/Panestra-cli/internal/config"
 )
 
 func TestRunForwardsArgumentsAndExitCode(t *testing.T) {
@@ -50,6 +56,134 @@ func TestExecStatusWritesAgentExitCode(t *testing.T) {
 	if string(b) != "9" {
 		t.Fatalf("status = %q", b)
 	}
+}
+
+func TestExecStatusOwnsPaneOnlyWhileAgentRuns(t *testing.T) {
+	tmux, pane := testLauncherTMUX(t)
+	t.Setenv("PANESTRA_CLI_HOME", t.TempDir())
+	if err := config.Save(config.Default()); err != nil {
+		t.Fatal(err)
+	}
+
+	activeFile := filepath.Join(t.TempDir(), "active")
+	t.Setenv("PANESTRA_TEST_ACTIVE", activeFile)
+	agent := filepath.Join(t.TempDir(), "agent")
+	script := `#!/bin/sh
+tmux show-option -pqv -t "$TMUX_PANE" @panestra_cli_active > "$PANESTRA_TEST_ACTIVE"
+tmux set-option -p -t "$TMUX_PANE" @panestra_cli_prompt "agent prompt"
+exit 9
+`
+	if err := os.WriteFile(agent, []byte(script), 0700); err != nil {
+		t.Fatal(err)
+	}
+	payload, _ := json.Marshal([]string{agent})
+	status := filepath.Join(t.TempDir(), "status")
+	if code := ExecStatus(status, base64.RawURLEncoding.EncodeToString(payload), ""); code != 9 {
+		t.Fatalf("exit = %d", code)
+	}
+	active, err := os.ReadFile(activeFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.TrimSpace(string(active)) != "1" {
+		t.Fatalf("agent observed active option %q", active)
+	}
+	for _, option := range []string{"@panestra_cli_active", "@panestra_cli_prompt"} {
+		if value, _ := tmux("show-option", "-pqv", "-t", pane, option); value != "" {
+			t.Fatalf("%s remains after normal exit: %q", option, value)
+		}
+	}
+}
+
+func TestExecStatusReleasesPaneAfterSignal(t *testing.T) {
+	tmux, pane := testLauncherTMUX(t)
+	t.Setenv("PANESTRA_CLI_HOME", t.TempDir())
+	if err := config.Save(config.Default()); err != nil {
+		t.Fatal(err)
+	}
+
+	ready := filepath.Join(t.TempDir(), "ready")
+	t.Setenv("PANESTRA_TEST_READY", ready)
+	agent := filepath.Join(t.TempDir(), "agent")
+	script := `#!/bin/sh
+trap 'exit 143' TERM
+tmux set-option -p -t "$TMUX_PANE" @panestra_cli_prompt "agent prompt"
+: > "$PANESTRA_TEST_READY"
+while :; do sleep 1; done
+`
+	if err := os.WriteFile(agent, []byte(script), 0700); err != nil {
+		t.Fatal(err)
+	}
+	payload, _ := json.Marshal([]string{agent})
+	status := filepath.Join(t.TempDir(), "status")
+	done := make(chan int, 1)
+	go func() {
+		done <- ExecStatus(status, base64.RawURLEncoding.EncodeToString(payload), "")
+	}()
+
+	deadline := time.Now().Add(3 * time.Second)
+	for {
+		if _, err := os.Stat(ready); err == nil {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("agent did not become ready")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if err := syscall.Kill(os.Getpid(), syscall.SIGTERM); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case code := <-done:
+		if code != 143 {
+			t.Fatalf("exit = %d", code)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("agent did not exit after signal")
+	}
+	for _, option := range []string{"@panestra_cli_active", "@panestra_cli_prompt"} {
+		if value, _ := tmux("show-option", "-pqv", "-t", pane, option); value != "" {
+			t.Fatalf("%s remains after signal exit: %q", option, value)
+		}
+	}
+}
+
+func testLauncherTMUX(t *testing.T) (func(...string) (string, error), string) {
+	t.Helper()
+	if _, err := exec.LookPath("tmux"); err != nil {
+		t.Skip("tmux not installed")
+	}
+	tmuxTemp, err := os.MkdirTemp("/tmp", "pl-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(tmuxTemp) })
+	t.Setenv("TMUX_TMPDIR", tmuxTemp)
+	name := fmt.Sprintf("pl-%x", time.Now().UnixNano())
+	tmux := func(args ...string) (string, error) {
+		cmd := exec.Command("tmux", append([]string{"-L", name}, args...)...)
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			return "", fmt.Errorf("%w: %s", err, strings.TrimSpace(string(out)))
+		}
+		return strings.TrimSpace(string(out)), nil
+	}
+	if _, err := tmux("-f", "/dev/null", "new-session", "-d", "-s", "test", "sleep 60"); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _, _ = tmux("kill-server") })
+	pane, err := tmux("display-message", "-p", "-t", "test", "#{pane_id}")
+	if err != nil {
+		t.Fatal(err)
+	}
+	socket, err := tmux("display-message", "-p", "-t", pane, "#{socket_path}")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("TMUX", socket+",0,0")
+	t.Setenv("TMUX_PANE", pane)
+	return tmux, pane
 }
 
 func TestDedicatedConfigEnablesScrollback(t *testing.T) {

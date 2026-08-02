@@ -218,10 +218,18 @@ func ExecStatus(status, encoded, transcript string) int {
 		cfg, err := config.Load()
 		if err != nil {
 			fmt.Fprintln(os.Stderr, "panestra: configuration unavailable; display disabled:", err)
-		} else {
+		} else if cfg.Enabled {
 			client := ptmux.New()
-			_ = client.SetPrefix(pane, prompt.DisplayPrefix(cfg.Prefix))
-			_ = client.SetWaiting(pane, cfg.ShowWaitingMessage)
+			if err := client.Acquire(pane, prompt.DisplayPrefix(cfg.Prefix), cfg.ShowWaitingMessage); err != nil {
+				_ = client.Release(pane)
+				fmt.Fprintln(os.Stderr, "panestra: tmux display unavailable:", err)
+			} else {
+				defer func() {
+					if err := client.Release(pane); err != nil {
+						fmt.Fprintln(os.Stderr, "panestra: could not restore tmux settings:", err)
+					}
+				}()
+			}
 		}
 	}
 	code := run(argv[0], argv[1:], 1)

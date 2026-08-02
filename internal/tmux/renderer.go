@@ -15,6 +15,9 @@ func (c Client) Acquire(pane, prefix string, showWaiting bool) error {
 	refText, _ := c.run("show-options", "-wqv", "-t", pane, "@panestra_cli_refcount")
 	ref, _ := strconv.Atoi(refText)
 	if ref == 0 {
+		if err := c.ClearPrompt(pane); err != nil {
+			return err
+		}
 		status, err := c.run("show-options", "-wAv", "-t", pane, "pane-border-status")
 		if err != nil {
 			return err
@@ -49,6 +52,13 @@ func (c Client) Acquire(pane, prefix string, showWaiting bool) error {
 }
 
 func (c Client) Release(pane string) error {
+	refText, _ := c.run("show-options", "-wqv", "-t", pane, "@panestra_cli_refcount")
+	ref, _ := strconv.Atoi(refText)
+	if ref > 1 {
+		_, err := c.run("set-option", "-w", "-t", pane, "@panestra_cli_refcount", strconv.Itoa(ref-1))
+		return err
+	}
+
 	var errs []error
 	if _, err := c.run("set-option", "-p", "-u", "-t", pane, "@panestra_cli_active"); err != nil {
 		errs = append(errs, err)
@@ -61,15 +71,6 @@ func (c Client) Release(pane string) error {
 	}
 	if err := c.ClearPrompt(pane); err != nil {
 		errs = append(errs, err)
-	}
-	refText, _ := c.run("show-options", "-wqv", "-t", pane, "@panestra_cli_refcount")
-	ref, _ := strconv.Atoi(refText)
-	if ref > 1 {
-		_, err := c.run("set-option", "-w", "-t", pane, "@panestra_cli_refcount", strconv.Itoa(ref-1))
-		if err != nil {
-			errs = append(errs, err)
-		}
-		return errors.Join(errs...)
 	}
 	status, _ := c.run("show-options", "-wqv", "-t", pane, "@panestra_cli_previous_border_status")
 	format, _ := c.run("show-options", "-wqv", "-t", pane, "@panestra_cli_previous_border_format")
