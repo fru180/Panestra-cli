@@ -1,0 +1,26 @@
+class PanestraCli < Formula
+  desc "Keep the latest Codex or Claude Code prompt visible in the terminal"
+  homepage "https://github.com/fru180/Panestra-cli"
+  version "@VERSION@"
+  license "MIT"
+
+  on_arm do
+    url "https://github.com/fru180/Panestra-cli/releases/download/v@VERSION@/panestra-cli_Darwin_arm64.tar.gz"
+    sha256 "@ARM64_SHA@"
+  end
+
+  on_intel do
+    url "https://github.com/fru180/Panestra-cli/releases/download/v@VERSION@/panestra-cli_Darwin_x86_64.tar.gz"
+    sha256 "@X86_64_SHA@"
+  end
+
+  depends_on "tmux"
+
+  def install
+    bin.install "panestra"
+  end
+
+  test do
+    assert_match version.to_s, shell_output("#{bin}/panestra version")
+  end
+end

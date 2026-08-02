@@ -1,0 +1,6 @@
+bin/
+dist/
+.DS_Store
+
+.worktree/
+AGENTS.override.md

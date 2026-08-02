@@ -1,0 +1,16 @@
+{
+  "description": "Keep the latest Codex prompt visible with Panestra CLI.",
+  "hooks": {
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "panestra hook",
+            "timeout": 1
+          }
+        ]
+      }
+    ]
+  }
+}
