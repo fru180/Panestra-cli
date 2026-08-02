@@ -38,7 +38,11 @@ func run() int {
 		fmt.Println("Panestra CLI has been uninstalled.")
 		return 0
 	case "enable", "disable":
-		c := config.Load()
+		c, err := config.Load()
+		if err != nil {
+			fail(fmt.Errorf("%w; fix %s, then rerun panestra %s", err, config.Path(), os.Args[1]))
+			return 1
+		}
 		c.Enabled = os.Args[1] == "enable"
 		if err := config.Save(c); err != nil {
 			fail(err)

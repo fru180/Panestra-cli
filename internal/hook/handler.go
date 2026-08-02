@@ -23,7 +23,11 @@ func Handle(r io.Reader) {
 	if text == "" {
 		return
 	}
-	cfg := config.Load()
+	cfg, err := config.Load()
+	if err != nil {
+		debug(err)
+		return
+	}
 	if !cfg.Enabled {
 		return
 	}

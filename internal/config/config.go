@@ -2,6 +2,7 @@ package config
 
 import (
 	"bytes"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -21,17 +22,16 @@ func Path() string    { return filepath.Join(Home(), ".config", "panestra-cli", 
 func DataDir() string { return filepath.Join(Home(), ".local", "share", "panestra-cli") }
 func ShimDir() string { return filepath.Join(DataDir(), "shims") }
 
-func Load() Config {
+func Load() (Config, error) {
 	defaults := Default()
 	c := defaults
-	if _, err := os.Stat(Path()); err == nil {
-		decoded := defaults
-		if _, err := toml.DecodeFile(Path(), &decoded); err == nil {
-			if decoded.MaxWidth <= 0 {
-				decoded.MaxWidth = defaults.MaxWidth
-			}
-			c = decoded
-		}
+	if _, err := toml.DecodeFile(Path(), &c); err != nil {
+		safe := defaults
+		safe.Enabled = false
+		return safe, fmt.Errorf("load config %s: %w", Path(), err)
+	}
+	if c.MaxWidth <= 0 {
+		c.MaxWidth = defaults.MaxWidth
 	}
 	if os.Getenv("PANESTRA_CLI_DISABLE") != "" {
 		c.Enabled = false
@@ -44,7 +44,7 @@ func Load() Config {
 	if v, ok := os.LookupEnv("PANESTRA_CLI_PREFIX"); ok {
 		c.Prefix = v
 	}
-	return c
+	return c, nil
 }
 
 func Encode(c Config) ([]byte, error) {
