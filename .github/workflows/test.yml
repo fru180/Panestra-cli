@@ -30,7 +30,11 @@ jobs:
       - run: go run golang.org/x/vuln/cmd/govulncheck@v1.1.4 ./...
       - run: go test ./...
       - run: go build ./cmd/panestra
-      - run: sh -n scripts/install.sh scripts/uninstall.sh
+      - name: Verify third-party notices
+        run: |
+          scripts/generate-third-party-notices.sh
+          git diff --exit-code -- THIRD_PARTY_NOTICES
+      - run: sh -n scripts/*.sh
       - name: Validate adapter JSON
         run: |
           python3 -m json.tool adapters/codex/hooks/hooks.json >/dev/null
