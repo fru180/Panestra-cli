@@ -58,8 +58,21 @@ func TestAcquireReleaseRestoresWindow(t *testing.T) {
 	c, pane := testClient(t)
 	beforeStatus, _ := c.run("show-options", "-wAv", "-t", pane, "pane-border-status")
 	beforeFormat, _ := c.run("show-options", "-wAv", "-t", pane, "pane-border-format")
+	if err := c.SetPrompt(pane, "stale prompt"); err != nil {
+		t.Fatal(err)
+	}
 	if err := c.Acquire(pane, "Task: ", true); err != nil {
 		t.Fatal(err)
+	}
+	if prompt, _ := c.run("show-option", "-pqv", "-t", pane, "@panestra_cli_prompt"); prompt != "" {
+		t.Fatalf("stale prompt remains after acquire: %q", prompt)
+	}
+	active, err := c.IsActive(pane)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !active {
+		t.Fatal("pane is not active after acquire")
 	}
 	status, _ := c.run("show-options", "-wAv", "-t", pane, "pane-border-status")
 	if status != "top" {
@@ -73,9 +86,51 @@ func TestAcquireReleaseRestoresWindow(t *testing.T) {
 	if afterStatus != beforeStatus || afterFormat != beforeFormat {
 		t.Fatalf("not restored: %q/%q -> %q/%q", beforeStatus, beforeFormat, afterStatus, afterFormat)
 	}
-	active, _ := c.run("show-option", "-pqv", "-t", pane, "@panestra_cli_active")
-	if strings.TrimSpace(active) != "" {
-		t.Fatalf("active option remains: %q", active)
+	active, err = c.IsActive(pane)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if active {
+		t.Fatal("pane remains active after release")
+	}
+}
+
+func TestNestedAcquireKeepsOwnershipUntilFinalRelease(t *testing.T) {
+	c, pane := testClient(t)
+	if err := c.Acquire(pane, "Task: ", true); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.SetPrompt(pane, "current prompt"); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.Acquire(pane, "Task: ", true); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.Release(pane); err != nil {
+		t.Fatal(err)
+	}
+	active, err := c.IsActive(pane)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !active {
+		t.Fatal("nested release cleared active ownership")
+	}
+	if prompt, _ := c.run("show-option", "-pqv", "-t", pane, "@panestra_cli_prompt"); prompt != "current prompt" {
+		t.Fatalf("nested release changed prompt: %q", prompt)
+	}
+	if err := c.Release(pane); err != nil {
+		t.Fatal(err)
+	}
+	active, err = c.IsActive(pane)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if active {
+		t.Fatal("final release kept active ownership")
+	}
+	if prompt, _ := c.run("show-option", "-pqv", "-t", pane, "@panestra_cli_prompt"); prompt != "" {
+		t.Fatalf("final release kept prompt: %q", prompt)
 	}
 }
 

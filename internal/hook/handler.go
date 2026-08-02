@@ -36,6 +36,14 @@ func Handle(r io.Reader) {
 		return
 	}
 	t := ptmux.New()
+	active, err := t.IsActive(pane)
+	if err != nil {
+		debug(err)
+		return
+	}
+	if !active {
+		return
+	}
 	prefix := prompt.DisplayPrefix(cfg.Prefix)
 	max := cfg.MaxWidth
 	if width, e := t.PaneWidth(pane); e == nil {
