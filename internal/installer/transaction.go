@@ -17,9 +17,11 @@ type fileChange struct {
 }
 
 type fileState struct {
-	exists bool
-	data   []byte
-	mode   os.FileMode
+	exists     bool
+	data       []byte
+	mode       os.FileMode
+	symlink    bool
+	linkTarget string
 }
 
 func applyFileChanges(changes []fileChange) error {
@@ -34,7 +36,7 @@ func applyFileChangesWith(changes []fileChange, apply func(fileChange) error) er
 			return fmt.Errorf("duplicate setup target %s", change.path)
 		}
 		seen[change.path] = struct{}{}
-		state, err := readFileState(change.path)
+		state, err := readFileState(change)
 		if err != nil {
 			return err
 		}
@@ -68,19 +70,42 @@ func applyFileChange(change fileChange) error {
 	return atomicWrite(change.path, change.data, change.mode)
 }
 
-func readFileState(path string) (fileState, error) {
-	data, err := os.ReadFile(path)
+func readFileState(change fileChange) (fileState, error) {
+	info, err := os.Lstat(change.path)
 	if os.IsNotExist(err) {
 		return fileState{}, nil
 	}
 	if err != nil {
-		return fileState{}, err
+		return fileState{}, fmt.Errorf("inspect setup target %s: %w", change.path, err)
 	}
-	info, err := os.Stat(path)
+	state := fileState{exists: true}
+	if info.Mode()&os.ModeSymlink != 0 {
+		state.symlink = true
+		state.linkTarget, err = os.Readlink(change.path)
+		if err != nil {
+			return fileState{}, fmt.Errorf("read setup target symlink %s: %w", change.path, err)
+		}
+		if change.remove {
+			return state, nil
+		}
+		if _, err := resolveAtomicWritePath(change.path); err != nil {
+			return fileState{}, err
+		}
+	}
+	data, err := os.ReadFile(change.path)
 	if err != nil {
-		return fileState{}, err
+		return fileState{}, fmt.Errorf("read setup target %s: %w", change.path, err)
 	}
-	return fileState{exists: true, data: data, mode: info.Mode().Perm()}, nil
+	info, err = os.Stat(change.path)
+	if err != nil {
+		return fileState{}, fmt.Errorf("inspect setup target %s: %w", change.path, err)
+	}
+	if !info.Mode().IsRegular() {
+		return fileState{}, fmt.Errorf("setup target is not a regular file: %s", change.path)
+	}
+	state.data = data
+	state.mode = info.Mode().Perm()
+	return state, nil
 }
 
 func missingParentDirs(changes []fileChange) ([]string, error) {
@@ -120,6 +145,12 @@ func rollbackFileChanges(applied []fileChange, states map[string]fileState, crea
 		change := applied[i]
 		state := states[change.path]
 		if state.exists {
+			if state.symlink && change.remove {
+				if err := os.Symlink(state.linkTarget, change.path); err != nil {
+					errs = append(errs, fmt.Errorf("restore symlink %s: %w", change.path, err))
+				}
+				continue
+			}
 			if err := atomicWrite(change.path, state.data, state.mode); err != nil {
 				errs = append(errs, fmt.Errorf("restore %s: %w", change.path, err))
 			}

@@ -125,30 +125,67 @@ func prepareSetup(binary string, agents []string) ([]fileChange, error) {
 }
 
 func atomicWrite(path string, data []byte, mode os.FileMode) error {
-	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
-		return err
-	}
-	if info, err := os.Stat(path); err == nil {
-		mode = info.Mode().Perm()
-	}
-	tmp, err := os.CreateTemp(filepath.Dir(path), ".panestra-*")
+	writePath, err := resolveAtomicWritePath(path)
 	if err != nil {
 		return err
+	}
+	if err := os.MkdirAll(filepath.Dir(writePath), 0700); err != nil {
+		return fmt.Errorf("create parent directory for %s: %w", path, err)
+	}
+	if info, err := os.Stat(writePath); err == nil {
+		if !info.Mode().IsRegular() {
+			return fmt.Errorf("atomic write target for %s is not a regular file: %s", path, writePath)
+		}
+		mode = info.Mode().Perm()
+	} else if !os.IsNotExist(err) {
+		return fmt.Errorf("inspect atomic write target for %s: %w", path, err)
+	}
+	tmp, err := os.CreateTemp(filepath.Dir(writePath), ".panestra-*")
+	if err != nil {
+		return fmt.Errorf("create temporary file for %s: %w", path, err)
 	}
 	name := tmp.Name()
 	defer os.Remove(name)
 	if _, err = tmp.Write(data); err != nil {
 		tmp.Close()
-		return err
+		return fmt.Errorf("write temporary file for %s: %w", path, err)
 	}
 	if err = tmp.Chmod(mode); err != nil {
 		tmp.Close()
-		return err
+		return fmt.Errorf("set mode on temporary file for %s: %w", path, err)
 	}
 	if err = tmp.Close(); err != nil {
-		return err
+		return fmt.Errorf("close temporary file for %s: %w", path, err)
 	}
-	return os.Rename(name, path)
+	if err := os.Rename(name, writePath); err != nil {
+		return fmt.Errorf("replace atomic write target for %s: %w", path, err)
+	}
+	return nil
+}
+
+func resolveAtomicWritePath(path string) (string, error) {
+	info, err := os.Lstat(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return path, nil
+		}
+		return "", fmt.Errorf("inspect atomic write path %s: %w", path, err)
+	}
+	if info.Mode()&os.ModeSymlink == 0 {
+		return path, nil
+	}
+	resolved, err := filepath.EvalSymlinks(path)
+	if err != nil {
+		return "", fmt.Errorf("resolve symlink for atomic write %s: %w", path, err)
+	}
+	target, err := os.Stat(resolved)
+	if err != nil {
+		return "", fmt.Errorf("inspect symlink target for atomic write %s: %w", path, err)
+	}
+	if !target.Mode().IsRegular() {
+		return "", fmt.Errorf("symlink target for atomic write %s is not a regular file: %s", path, resolved)
+	}
+	return resolved, nil
 }
 
 func IsShimActive(agent string) bool {
