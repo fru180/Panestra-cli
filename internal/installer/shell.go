@@ -14,17 +14,25 @@ const endMarker = "# <<< panestra-cli <<<"
 func zshrcPath() string { return filepath.Join(config.Home(), ".zshrc") }
 
 func addPathBlock() error {
+	change, err := preparePathBlock()
+	if err != nil {
+		return err
+	}
+	return applyFileChanges([]fileChange{change})
+}
+
+func preparePathBlock() (fileChange, error) {
 	path := zshrcPath()
 	b, err := os.ReadFile(path)
 	if err != nil && !os.IsNotExist(err) {
-		return err
+		return fileChange{}, err
 	}
 	content := removeManagedBlock(string(b))
 	if content != "" && !strings.HasSuffix(content, "\n") {
 		content += "\n"
 	}
 	content += beginMarker + "\nexport PATH=\"$HOME/.local/share/panestra-cli/shims:$PATH\"\n" + endMarker + "\n"
-	return atomicWrite(path, []byte(content), 0600)
+	return fileChange{path: path, data: []byte(content), mode: 0600}, nil
 }
 
 func removePathBlock() error {

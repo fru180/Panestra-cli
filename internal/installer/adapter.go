@@ -20,10 +20,16 @@ func claudeSettingsPath() string {
 }
 
 func installAdapters(binary string, agents []string) error {
-	script := "#!/bin/sh\nexec " + shellQuote(binary) + " hook\n"
-	if err := atomicWrite(hookScriptPath(), []byte(script), 0700); err != nil {
+	changes, err := prepareAdapters(binary, agents)
+	if err != nil {
 		return err
 	}
+	return applyFileChanges(changes)
+}
+
+func prepareAdapters(binary string, agents []string) ([]fileChange, error) {
+	script := "#!/bin/sh\nexec " + shellQuote(binary) + " hook\n"
+	changes := []fileChange{{path: hookScriptPath(), data: []byte(script), mode: 0700}}
 	for _, agent := range []string{"codex", "claude"} {
 		var path string
 		if agent == "codex" {
@@ -31,11 +37,15 @@ func installAdapters(binary string, agents []string) error {
 		} else {
 			path = claudeSettingsPath()
 		}
-		if err := mergeHook(path, !hasAgent(agents, agent)); err != nil {
-			return fmt.Errorf("configure %s hook: %w", agent, err)
+		change, ok, err := prepareHookChange(path, !hasAgent(agents, agent))
+		if err != nil {
+			return nil, fmt.Errorf("configure %s hook: %w", agent, err)
+		}
+		if ok {
+			changes = append(changes, change)
 		}
 	}
-	return nil
+	return changes, nil
 }
 
 func hasAgent(agents []string, target string) bool {
@@ -66,29 +76,67 @@ func adapterInstalled(path string) bool {
 }
 
 func mergeHook(path string, remove bool) error {
+	change, ok, err := prepareHookChange(path, remove)
+	if err != nil || !ok {
+		return err
+	}
+	return applyFileChanges([]fileChange{change})
+}
+
+func prepareHookChange(path string, remove bool) (fileChange, bool, error) {
 	root := map[string]any{}
 	b, err := os.ReadFile(path)
 	if err == nil && len(b) > 0 {
-		if err := json.Unmarshal(b, &root); err != nil {
-			return fmt.Errorf("invalid JSON in %s: %w", path, err)
+		var value any
+		if err := json.Unmarshal(b, &value); err != nil {
+			return fileChange{}, false, fmt.Errorf("invalid JSON in %s: %w", path, err)
+		}
+		var ok bool
+		root, ok = value.(map[string]any)
+		if !ok {
+			return fileChange{}, false, fmt.Errorf("invalid JSON in %s: root must be an object", path)
 		}
 	} else if err != nil && !os.IsNotExist(err) {
-		return err
+		return fileChange{}, false, err
 	}
-	hooks, _ := root["hooks"].(map[string]any)
-	if hooks == nil {
-		hooks = map[string]any{}
+
+	hooks := map[string]any{}
+	if raw, exists := root["hooks"]; exists {
+		var ok bool
+		hooks, ok = raw.(map[string]any)
+		if !ok {
+			return fileChange{}, false, fmt.Errorf("invalid JSON in %s: hooks must be an object", path)
+		}
+	} else if remove {
+		return fileChange{}, false, nil
 	}
-	groups, _ := hooks["UserPromptSubmit"].([]any)
+
+	groups := []any{}
+	if raw, exists := hooks["UserPromptSubmit"]; exists {
+		var ok bool
+		groups, ok = raw.([]any)
+		if !ok {
+			return fileChange{}, false, fmt.Errorf("invalid JSON in %s: hooks.UserPromptSubmit must be an array", path)
+		}
+	} else if remove {
+		return fileChange{}, false, nil
+	}
+
 	clean := make([]any, 0, len(groups)+1)
+	changed := false
 	for _, raw := range groups {
 		group, ok := raw.(map[string]any)
 		if !ok {
 			clean = append(clean, raw)
 			continue
 		}
-		handlers, _ := group["hooks"].([]any)
+		handlers, ok := group["hooks"].([]any)
+		if !ok {
+			clean = append(clean, raw)
+			continue
+		}
 		kept := make([]any, 0, len(handlers))
+		groupChanged := false
 		for _, hr := range handlers {
 			h, ok := hr.(map[string]any)
 			if !ok {
@@ -98,15 +146,31 @@ func mergeHook(path string, remove bool) error {
 			cmd, _ := h["command"].(string)
 			if !strings.Contains(cmd, filepath.Join("panestra-cli", "adapters", "panestra-hook")) {
 				kept = append(kept, hr)
+			} else {
+				changed = true
+				groupChanged = true
 			}
 		}
+		if !groupChanged {
+			clean = append(clean, raw)
+			continue
+		}
 		if len(kept) > 0 {
-			group["hooks"] = kept
-			clean = append(clean, group)
+			copy := cloneObject(group)
+			copy["hooks"] = kept
+			clean = append(clean, copy)
+		} else if len(group) > 1 {
+			copy := cloneObject(group)
+			copy["hooks"] = []any{}
+			clean = append(clean, copy)
 		}
 	}
 	if !remove {
 		clean = append(clean, map[string]any{"hooks": []any{map[string]any{"type": "command", "command": shellQuote(hookScriptPath()), "timeout": 1}}})
+		changed = true
+	}
+	if remove && !changed {
+		return fileChange{}, false, nil
 	}
 	if len(clean) == 0 {
 		delete(hooks, "UserPromptSubmit")
@@ -118,15 +182,20 @@ func mergeHook(path string, remove bool) error {
 	} else {
 		root["hooks"] = hooks
 	}
-	if remove && os.IsNotExist(err) {
-		return nil
-	}
 	out, err := json.MarshalIndent(root, "", "  ")
 	if err != nil {
-		return err
+		return fileChange{}, false, err
 	}
 	out = append(out, '\n')
-	return atomicWrite(path, out, 0600)
+	return fileChange{path: path, data: out, mode: 0600}, true, nil
+}
+
+func cloneObject(value map[string]any) map[string]any {
+	copy := make(map[string]any, len(value))
+	for key, item := range value {
+		copy[key] = item
+	}
+	return copy
 }
 
 func shellQuote(s string) string { return "'" + strings.ReplaceAll(s, "'", "'\\''") + "'" }
