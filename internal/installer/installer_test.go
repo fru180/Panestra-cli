@@ -45,6 +45,148 @@ func TestMergeHookPreservesExistingAndIsIdempotent(t *testing.T) {
 	}
 }
 
+func TestManagedHookRequiresExactGeneratedCommand(t *testing.T) {
+	t.Setenv("PANESTRA_CLI_HOME", t.TempDir())
+	exact := shellQuote(hookScriptPath())
+	tests := []struct {
+		name    string
+		handler map[string]any
+		want    bool
+	}{
+		{name: "managed", handler: map[string]any{"type": "command", "command": exact}, want: true},
+		{name: "backup", handler: map[string]any{"type": "command", "command": shellQuote(hookScriptPath() + ".backup")}},
+		{name: "additional arguments", handler: map[string]any{"type": "command", "command": exact + " --do-not-delete"}},
+		{name: "similar path", handler: map[string]any{"type": "command", "command": shellQuote(filepath.Join(config.DataDir(), "other", "panestra-hook"))}},
+		{name: "unquoted", handler: map[string]any{"type": "command", "command": hookScriptPath()}},
+		{name: "different handler type", handler: map[string]any{"type": "prompt", "command": exact}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := managedHook(tt.handler); got != tt.want {
+				t.Fatalf("managedHook() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestMergeHookPreservesSimilarCommandsAndMatcherFields(t *testing.T) {
+	t.Setenv("PANESTRA_CLI_HOME", t.TempDir())
+	path := codexHooksPath()
+	exact := shellQuote(hookScriptPath())
+	similar := []string{
+		shellQuote(hookScriptPath() + ".backup"),
+		exact + " --do-not-delete",
+		shellQuote(filepath.Join(config.DataDir(), "other", "panestra-hook")),
+		hookScriptPath(),
+	}
+	root := map[string]any{
+		"hooks": map[string]any{
+			"UserPromptSubmit": []any{
+				map[string]any{
+					"matcher": "preserve-me",
+					"future":  map[string]any{"enabled": true},
+					"hooks":   []any{map[string]any{"type": "command", "command": exact}},
+				},
+				map[string]any{
+					"hooks": []any{
+						map[string]any{"type": "command", "command": similar[0]},
+						map[string]any{"type": "command", "command": similar[1]},
+						map[string]any{"type": "command", "command": similar[2]},
+						map[string]any{"type": "command", "command": similar[3]},
+					},
+				},
+			},
+		},
+	}
+	b, err := json.Marshal(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, b, 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := mergeHook(path, false); err != nil {
+		t.Fatal(err)
+	}
+	if err := mergeHook(path, false); err != nil {
+		t.Fatal(err)
+	}
+	if !adapterInstalled(path) {
+		t.Fatal("managed hook was not detected")
+	}
+	commands, groups := readHookCommands(t, path)
+	if countValue(commands, exact) != 1 {
+		t.Fatalf("managed command count = %d, want 1: %#v", countValue(commands, exact), commands)
+	}
+	for _, command := range similar {
+		if countValue(commands, command) != 1 {
+			t.Fatalf("similar command %q was changed: %#v", command, commands)
+		}
+	}
+	assertMatcherGroupPreserved(t, groups)
+
+	if err := mergeHook(path, true); err != nil {
+		t.Fatal(err)
+	}
+	afterFirstUninstall, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := mergeHook(path, true); err != nil {
+		t.Fatal(err)
+	}
+	afterSecondUninstall, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(afterSecondUninstall, afterFirstUninstall) {
+		t.Fatal("repeated uninstall changed hook configuration")
+	}
+	if adapterInstalled(path) {
+		t.Fatal("managed hook remains installed")
+	}
+	commands, groups = readHookCommands(t, path)
+	if countValue(commands, exact) != 0 {
+		t.Fatalf("managed command remains: %#v", commands)
+	}
+	for _, command := range similar {
+		if countValue(commands, command) != 1 {
+			t.Fatalf("similar command %q was changed by uninstall: %#v", command, commands)
+		}
+	}
+	assertMatcherGroupPreserved(t, groups)
+}
+
+func TestAdapterInstalledIgnoresManagedCommandOutsideUserPromptSubmit(t *testing.T) {
+	t.Setenv("PANESTRA_CLI_HOME", t.TempDir())
+	path := codexHooksPath()
+	root := map[string]any{
+		"note": shellQuote(hookScriptPath()),
+		"hooks": map[string]any{
+			"OtherEvent": []any{map[string]any{
+				"hooks": []any{map[string]any{"type": "command", "command": shellQuote(hookScriptPath())}},
+			}},
+		},
+	}
+	b, err := json.Marshal(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, b, 0600); err != nil {
+		t.Fatal(err)
+	}
+	if adapterInstalled(path) {
+		t.Fatal("command outside UserPromptSubmit was detected as installed")
+	}
+}
+
 func TestMergeHookRejectsInvalidJSONShapes(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -495,6 +637,77 @@ func contains(values []string, target string) bool {
 		}
 	}
 	return false
+}
+
+func readHookCommands(t *testing.T, path string) ([]string, []any) {
+	t.Helper()
+	b, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var root map[string]any
+	if err := json.Unmarshal(b, &root); err != nil {
+		t.Fatal(err)
+	}
+	hooks, ok := root["hooks"].(map[string]any)
+	if !ok {
+		t.Fatalf("hooks is not an object: %s", b)
+	}
+	groups, ok := hooks["UserPromptSubmit"].([]any)
+	if !ok {
+		t.Fatalf("UserPromptSubmit is not an array: %s", b)
+	}
+	var commands []string
+	for _, raw := range groups {
+		group, ok := raw.(map[string]any)
+		if !ok {
+			continue
+		}
+		handlers, ok := group["hooks"].([]any)
+		if !ok {
+			continue
+		}
+		for _, rawHandler := range handlers {
+			handler, ok := rawHandler.(map[string]any)
+			if !ok {
+				continue
+			}
+			if command, ok := handler["command"].(string); ok {
+				commands = append(commands, command)
+			}
+		}
+	}
+	return commands, groups
+}
+
+func countValue(values []string, target string) int {
+	count := 0
+	for _, value := range values {
+		if value == target {
+			count++
+		}
+	}
+	return count
+}
+
+func assertMatcherGroupPreserved(t *testing.T, groups []any) {
+	t.Helper()
+	for _, raw := range groups {
+		group, ok := raw.(map[string]any)
+		if !ok || group["matcher"] != "preserve-me" {
+			continue
+		}
+		future, ok := group["future"].(map[string]any)
+		if !ok || future["enabled"] != true {
+			t.Fatalf("matcher group unknown fields changed: %#v", group)
+		}
+		handlers, ok := group["hooks"].([]any)
+		if !ok || len(handlers) != 0 {
+			t.Fatalf("matcher group hooks = %#v, want empty array", group["hooks"])
+		}
+		return
+	}
+	t.Fatal("matcher group was removed")
 }
 
 func TestDoctorReportsInvalidConfig(t *testing.T) {
