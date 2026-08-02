@@ -7,9 +7,9 @@ Go module notices were generated with github.com/google/go-licenses/v2 v2.0.1.
 
 ================================================================================
 Component: github.com/BurntSushi/toml
-Version: v1.4.0
+Version: v1.6.0
 License: MIT
-Source: https://github.com/BurntSushi/toml/blob/v1.4.0/COPYING
+Source: https://github.com/BurntSushi/toml/blob/v1.6.0/COPYING
 
 The MIT License (MIT)
 
@@ -35,10 +35,10 @@ THE SOFTWARE.
 
 
 ================================================================================
-Component: github.com/clipperhouse/uax29/v2
-Version: v2.2.0
+Component: github.com/clipperhouse/uax29/v2/graphemes
+Version: v2.7.0
 License: MIT
-Source: https://github.com/clipperhouse/uax29/blob/v2.2.0/LICENSE
+Source: https://github.com/clipperhouse/uax29/blob/v2.7.0/LICENSE
 
 MIT License
 
@@ -65,9 +65,9 @@ SOFTWARE.
 
 ================================================================================
 Component: github.com/mattn/go-runewidth
-Version: v0.0.19
+Version: v0.0.27
 License: MIT
-Source: https://github.com/mattn/go-runewidth/blob/v0.0.19/LICENSE
+Source: https://github.com/mattn/go-runewidth/blob/v0.0.27/LICENSE
 
 The MIT License (MIT)
 
@@ -123,9 +123,9 @@ SOFTWARE.
 
 ================================================================================
 Component: golang.org/x/sys/unix
-Version: v0.33.0
+Version: v0.47.0
 License: BSD-3-Clause
-Source: https://cs.opensource.google/go/x/sys/+/v0.33.0:LICENSE
+Source: https://cs.opensource.google/go/x/sys/+/v0.47.0:LICENSE
 
 Copyright 2009 The Go Authors.
 
@@ -158,9 +158,9 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 ================================================================================
 Component: golang.org/x/term
-Version: v0.32.0
+Version: v0.45.0
 License: BSD-3-Clause
-Source: https://cs.opensource.google/go/x/term/+/v0.32.0:LICENSE
+Source: https://cs.opensource.google/go/x/term/+/v0.45.0:LICENSE
 
 Copyright 2009 The Go Authors.
 

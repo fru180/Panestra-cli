@@ -39,6 +39,17 @@ func (c Client) CurrentPane() (string, error) {
 	return c.run("display-message", "-p", "#{pane_id}")
 }
 
+func (c Client) IsActive(pane string) (bool, error) {
+	if pane == "" {
+		return false, fmt.Errorf("tmux pane is empty")
+	}
+	value, err := c.run("show-option", "-pqv", "-t", pane, "@panestra_cli_active")
+	if err != nil {
+		return false, err
+	}
+	return value == "1", nil
+}
+
 func (c Client) SetPrompt(pane, value string) error {
 	if pane == "" {
 		return fmt.Errorf("tmux pane is empty")

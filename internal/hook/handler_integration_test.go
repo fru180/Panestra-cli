@@ -10,6 +10,7 @@ import (
 
 	"github.com/fru180/Panestra-cli/internal/config"
 	"github.com/fru180/Panestra-cli/internal/prompt"
+	ptmux "github.com/fru180/Panestra-cli/internal/tmux"
 )
 
 func TestHandleUpdatesOnlyTargetPane(t *testing.T) {
@@ -60,6 +61,17 @@ func TestHandleUpdatesOnlyTargetPane(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	Handle(strings.NewReader(`{"hook_event_name":"UserPromptSubmit","prompt":"所有されていないprompt"}`))
+	for _, option := range []string{"@panestra_cli_prompt", "@panestra_cli_prefix"} {
+		if value, _ := tmux("show-options", "-pqv", "-t", ids[0], option); value != "" {
+			t.Fatalf("%s was saved without active ownership: %q", option, value)
+		}
+	}
+
+	client := ptmux.New()
+	if err := client.Acquire(ids[0], "Task: ", true); err != nil {
+		t.Fatal(err)
+	}
 	Handle(strings.NewReader("{\"hook_event_name\":\"UserPromptSubmit\",\"prompt\":\"認証処理を修正してください。\\n条件: '$` ; () 日本語の長い追加条件\"}"))
 	got, err := tmux("show-options", "-pqv", "-t", ids[0], "@panestra_cli_prompt")
 	if err != nil {
@@ -105,6 +117,17 @@ func TestHandleUpdatesOnlyTargetPane(t *testing.T) {
 		if value, _ := tmux("show-options", "-pqv", "-t", ids[0], option); value != "" {
 			t.Fatalf("%s was saved for invalid config: %q", option, value)
 		}
+	}
+
+	if err := client.Release(ids[0]); err != nil {
+		t.Fatal(err)
+	}
+	if err := config.Save(config.Default()); err != nil {
+		t.Fatal(err)
+	}
+	Handle(strings.NewReader(`{"hook_event_name":"UserPromptSubmit","prompt":"解放後のprompt"}`))
+	if value, _ := tmux("show-options", "-pqv", "-t", ids[0], "@panestra_cli_prompt"); value != "" {
+		t.Fatalf("prompt was saved after release: %q", value)
 	}
 }
 
