@@ -302,6 +302,185 @@ func TestPathBlockIdempotent(t *testing.T) {
 	}
 }
 
+func TestSetupAndUninstallPreserveSymlinkedUserConfiguration(t *testing.T) {
+	home, fakeBin := t.TempDir(), t.TempDir()
+	t.Setenv("PANESTRA_CLI_HOME", home)
+	t.Setenv("PANESTRA_CLI_ALLOW_UNSUPPORTED", "1")
+	t.Setenv("CLAUDE_CONFIG_DIR", "")
+	t.Setenv("SHELL", "/bin/zsh")
+	for _, agent := range []string{"codex", "claude"} {
+		writeExecutable(t, filepath.Join(fakeBin, agent), "#!/bin/sh\nexit 0\n")
+	}
+	t.Setenv("PATH", fakeBin)
+
+	dotfiles := filepath.Join(home, "dotfiles")
+	for _, dir := range []string{dotfiles, filepath.Dir(codexHooksPath()), filepath.Dir(claudeSettingsPath())} {
+		if err := os.MkdirAll(dir, 0700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	targets := []struct {
+		path       string
+		link       string
+		linkTarget string
+		content    string
+		mode       os.FileMode
+	}{
+		{
+			path:       filepath.Join(dotfiles, "zshrc"),
+			link:       zshrcPath(),
+			linkTarget: filepath.Join("dotfiles", "zshrc"),
+			content:    "export KEEP=1\n",
+			mode:       0644,
+		},
+		{
+			path:       filepath.Join(dotfiles, "codex-hooks.json"),
+			link:       codexHooksPath(),
+			linkTarget: filepath.Join("..", "dotfiles", "codex-hooks.json"),
+			content:    "{\"codexKeep\":true}\n",
+			mode:       0640,
+		},
+		{
+			path:       filepath.Join(dotfiles, "claude-settings.json"),
+			link:       claudeSettingsPath(),
+			linkTarget: filepath.Join(dotfiles, "claude-settings.json"),
+			content:    "{\"claudeKeep\":true}\n",
+			mode:       0604,
+		},
+	}
+	for _, target := range targets {
+		if err := os.WriteFile(target.path, []byte(target.content), target.mode); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Symlink(target.linkTarget, target.link); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	if err := Setup(); err != nil {
+		t.Fatal(err)
+	}
+	for _, target := range targets {
+		assertSymlink(t, target.link, target.linkTarget)
+		info, err := os.Stat(target.path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if info.Mode().Perm() != target.mode {
+			t.Fatalf("mode for %s = %o, want %o", target.path, info.Mode().Perm(), target.mode)
+		}
+	}
+	zshrc, err := os.ReadFile(targets[0].path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(zshrc), "export KEEP=1") || !strings.Contains(string(zshrc), beginMarker) {
+		t.Fatalf("symlinked zshrc was not updated correctly: %s", zshrc)
+	}
+	for _, target := range targets[1:] {
+		if !adapterInstalled(target.link) {
+			t.Fatalf("managed hook was not installed through %s", target.link)
+		}
+	}
+
+	if err := Uninstall(); err != nil {
+		t.Fatal(err)
+	}
+	for _, target := range targets {
+		assertSymlink(t, target.link, target.linkTarget)
+	}
+	zshrc, err = os.ReadFile(targets[0].path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(zshrc) != "export KEEP=1\n" {
+		t.Fatalf("symlinked zshrc was not cleaned correctly: %q", zshrc)
+	}
+	for _, target := range targets[1:] {
+		content, err := os.ReadFile(target.path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if strings.Contains(string(content), "panestra-hook") || !strings.Contains(string(content), "Keep") {
+			t.Fatalf("symlinked agent settings were not cleaned correctly: %s", content)
+		}
+	}
+}
+
+func TestAtomicWriteRejectsInvalidSymlinkTargets(t *testing.T) {
+	tests := []struct {
+		name       string
+		linkTarget func(string) string
+		want       string
+	}{
+		{
+			name: "dangling",
+			linkTarget: func(root string) string {
+				return filepath.Join(root, "missing")
+			},
+			want: "resolve symlink",
+		},
+		{
+			name: "directory",
+			linkTarget: func(root string) string {
+				return root
+			},
+			want: "not a regular file",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			root := t.TempDir()
+			link := filepath.Join(root, "settings.json")
+			target := tt.linkTarget(root)
+			if err := os.Symlink(target, link); err != nil {
+				t.Fatal(err)
+			}
+			err := atomicWrite(link, []byte("changed\n"), 0600)
+			if err == nil || !strings.Contains(err.Error(), tt.want) || !strings.Contains(err.Error(), link) {
+				t.Fatalf("got error %v, want containing %q and %q", err, tt.want, link)
+			}
+			assertSymlink(t, link, target)
+		})
+	}
+}
+
+func TestAtomicWriteReportsSymlinkTargetPermissionError(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root can write to read-only directories")
+	}
+	root := t.TempDir()
+	targetDir := filepath.Join(root, "target")
+	if err := os.Mkdir(targetDir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	target := filepath.Join(targetDir, "zshrc")
+	if err := os.WriteFile(target, []byte("before\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(root, "zshrc-link")
+	if err := os.Symlink(target, link); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(targetDir, 0500); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(targetDir, 0700) })
+
+	err := atomicWrite(link, []byte("after\n"), 0600)
+	if err == nil || !strings.Contains(err.Error(), "create temporary file") || !strings.Contains(err.Error(), link) {
+		t.Fatalf("got error %v, want a contextual permission error", err)
+	}
+	assertSymlink(t, link, target)
+	content, readErr := os.ReadFile(target)
+	if readErr != nil {
+		t.Fatal(readErr)
+	}
+	if string(content) != "before\n" {
+		t.Fatalf("permission failure changed target: %q", content)
+	}
+}
+
 func TestInstallAdaptersWritesValidAgentFiles(t *testing.T) {
 	t.Setenv("PANESTRA_CLI_HOME", t.TempDir())
 	if err := installAdapters("/opt/bin/panestra", []string{"codex", "claude"}); err != nil {
@@ -556,6 +735,9 @@ func TestApplyFileChangesRollsBackWritesDeletesAndDirectories(t *testing.T) {
 	root := t.TempDir()
 	existing := filepath.Join(root, "existing")
 	stale := filepath.Join(root, "stale")
+	staleTarget := filepath.Join(root, "targets", "stale-target")
+	linkedTarget := filepath.Join(root, "targets", "linked-target")
+	linked := filepath.Join(root, "linked")
 	created := filepath.Join(root, "new", "nested", "created")
 	for _, file := range []struct {
 		path    string
@@ -563,17 +745,28 @@ func TestApplyFileChangesRollsBackWritesDeletesAndDirectories(t *testing.T) {
 		mode    os.FileMode
 	}{
 		{path: existing, content: "before\n", mode: 0640},
-		{path: stale, content: "restore me\n", mode: 0604},
+		{path: staleTarget, content: "restore me\n", mode: 0604},
+		{path: linkedTarget, content: "linked before\n", mode: 0644},
 	} {
+		if err := os.MkdirAll(filepath.Dir(file.path), 0700); err != nil {
+			t.Fatal(err)
+		}
 		if err := os.WriteFile(file.path, []byte(file.content), file.mode); err != nil {
 			t.Fatal(err)
 		}
+	}
+	if err := os.Symlink(filepath.Join("targets", "stale-target"), stale); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(filepath.Join("targets", "linked-target"), linked); err != nil {
+		t.Fatal(err)
 	}
 	before := snapshotTree(t, root)
 	wantErr := errors.New("injected commit failure")
 	changes := []fileChange{
 		{path: existing, data: []byte("after\n"), mode: 0600},
 		{path: stale, remove: true},
+		{path: linked, data: []byte("linked after\n"), mode: 0600},
 		{path: created, data: []byte("new\n"), mode: 0600},
 		{path: filepath.Join(root, "never-written"), data: []byte("x"), mode: 0600},
 	}
@@ -590,6 +783,48 @@ func TestApplyFileChangesRollsBackWritesDeletesAndDirectories(t *testing.T) {
 	}
 	if after := snapshotTree(t, root); !reflect.DeepEqual(after, before) {
 		t.Fatalf("rollback did not restore filesystem:\n got: %#v\nwant: %#v", after, before)
+	}
+}
+
+func TestApplyFileChangesRejectsDanglingSymlinkBeforeChanges(t *testing.T) {
+	root := t.TempDir()
+	existing := filepath.Join(root, "existing")
+	if err := os.WriteFile(existing, []byte("before\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	dangling := filepath.Join(root, "dangling")
+	if err := os.Symlink("missing", dangling); err != nil {
+		t.Fatal(err)
+	}
+	before := snapshotTree(t, root)
+
+	err := applyFileChanges([]fileChange{
+		{path: existing, data: []byte("after\n"), mode: 0600},
+		{path: dangling, data: []byte("new\n"), mode: 0600},
+	})
+	if err == nil || !strings.Contains(err.Error(), "resolve symlink") || !strings.Contains(err.Error(), dangling) {
+		t.Fatalf("got error %v, want dangling symlink context", err)
+	}
+	if after := snapshotTree(t, root); !reflect.DeepEqual(after, before) {
+		t.Fatalf("dangling symlink validation changed filesystem:\n got: %#v\nwant: %#v", after, before)
+	}
+}
+
+func assertSymlink(t *testing.T, path, wantTarget string) {
+	t.Helper()
+	info, err := os.Lstat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode()&os.ModeSymlink == 0 {
+		t.Fatalf("%s is not a symlink", path)
+	}
+	target, err := os.Readlink(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if target != wantTarget {
+		t.Fatalf("symlink target for %s = %q, want %q", path, target, wantTarget)
 	}
 }
 
