@@ -56,6 +56,7 @@ Setup and uninstall must modify only Panestra CLI-owned hook entries, managed `.
 
 ## Release Process
 
+- Homebrew distribution uses the separate public repository `fru180/homebrew-tap`. The release workflow renders and pushes its Formula with the `HOMEBREW_TAP_TOKEN` secret when `HOMEBREW_TAP_ENABLED=true`.
 - Confirm all development commands above pass, including Terminal.app, iTerm2, Ghostty, Intel Mac, and real-agent smoke tests where available.
 - Follow `docs/RELEASE.md`, including the token rotation and release verification procedures.
 - Merge the reviewed feature branch to `main`, then create and push an annotated version tag such as `v0.2.0`.

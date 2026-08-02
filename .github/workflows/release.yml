@@ -215,7 +215,7 @@ jobs:
           name: release-bundle
       - env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release create "$GITHUB_REF_NAME" panestra-cli_Darwin_*.tar.gz panestra-cli_Darwin_*.spdx.json checksums.txt --generate-notes --verify-tag
+        run: gh release create "$GITHUB_REF_NAME" panestra-cli_Darwin_*.tar.gz panestra-cli_Darwin_*.spdx.json checksums.txt --repo "$GITHUB_REPOSITORY" --generate-notes --verify-tag
 
   homebrew:
     needs: publish
