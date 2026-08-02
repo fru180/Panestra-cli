@@ -91,6 +91,8 @@ If prompts do not update, inspect `/hooks` in the affected agent. Codex hooks mu
 
 In dedicated tmux sessions, use the mouse wheel or trackpad to browse output. Scrolling back to the bottom resumes live output.
 
+In iTerm2, scrolling requires both **Settings > Profiles > Terminal > Enable mouse reporting** and **Report mouse wheel events** to be enabled. Run `panestra doctor` to display this reminder when iTerm2 is detected.
+
 ### Privacy
 
 Panestra CLI does not save prompts to files or perform external communication or telemetry. The latest prompt is held temporarily only in a tmux pane option and is cleared when the session ends.
@@ -183,6 +185,8 @@ show_waiting_message = true
 プロンプト表示が更新されない場合は、対象エージェントの `/hooks` を確認します。Codexのフックは信頼済みかつ有効である必要があり、Claude CodeではUser scopeの `UserPromptSubmit` フックが有効である必要があります。`PANESTRA_CLI_DEBUG=1` を指定して実行すると、診断用エラーがstderrへ出力されます。
 
 専用tmuxセッションでは、マウスホイールまたはトラックパッドで過去の出力を確認できます。最下部まで戻ると最新出力の追従を再開します。
+
+iTerm2では、**Settings > Profiles > Terminal > Enable mouse reporting** と **Report mouse wheel events** の両方を有効にする必要があります。iTerm2を検出した場合、`panestra doctor` にもこの確認手順が表示されます。
 
 ### プライバシー
 

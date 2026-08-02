@@ -33,6 +33,7 @@ func doctor(out io.Writer) bool {
 	check(filepath.Base(os.Getenv("SHELL")) == "zsh", "zsh detected", "zsh is not the current shell")
 	_, err := exec.LookPath("tmux")
 	check(err == nil, "tmux detected", "tmux was not found (run: brew install tmux)")
+	writeTerminalHints(out)
 	found := 0
 	for _, agent := range []string{"codex", "claude"} {
 		_, err := launcher.Resolve(agent)
@@ -69,4 +70,11 @@ func doctor(out io.Writer) bool {
 		check(strings.Count(string(b), beginMarker) == 1, "shell configuration is installed once", "shell configuration is missing or duplicated")
 	}
 	return ok
+}
+
+func writeTerminalHints(out io.Writer) {
+	if os.Getenv("TERM_PROGRAM") != "iTerm.app" && os.Getenv("LC_TERMINAL") != "iTerm2" {
+		return
+	}
+	fmt.Fprintln(out, "- iTerm2 scrolling requires Settings > Profiles > Terminal > Enable mouse reporting and Report mouse wheel events")
 }

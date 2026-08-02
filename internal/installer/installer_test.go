@@ -964,6 +964,37 @@ func TestDoctorReportsInvalidConfig(t *testing.T) {
 	}
 }
 
+func TestWriteTerminalHints(t *testing.T) {
+	tests := []struct {
+		name        string
+		termProgram string
+		lcTerminal  string
+		wantHint    bool
+	}{
+		{name: "direct iTerm2 session", termProgram: "iTerm.app", wantHint: true},
+		{name: "iTerm2 session inside tmux", termProgram: "tmux", lcTerminal: "iTerm2", wantHint: true},
+		{name: "other terminal", termProgram: "Apple_Terminal", wantHint: false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Setenv("TERM_PROGRAM", tt.termProgram)
+			t.Setenv("LC_TERMINAL", tt.lcTerminal)
+			var output strings.Builder
+			writeTerminalHints(&output)
+			got := output.String()
+			if tt.wantHint {
+				for _, want := range []string{"iTerm2 scrolling requires", "Enable mouse reporting", "Report mouse wheel events"} {
+					if !strings.Contains(got, want) {
+						t.Fatalf("terminal hint does not contain %q: %q", want, got)
+					}
+				}
+			} else if got != "" {
+				t.Fatalf("terminal hint = %q, want no output", got)
+			}
+		})
+	}
+}
+
 func TestSetupRemovesStaleAgentConfiguration(t *testing.T) {
 	home, fakeBin := t.TempDir(), t.TempDir()
 	t.Setenv("PANESTRA_CLI_HOME", home)
