@@ -26,7 +26,7 @@ func Setup() error {
 	if err != nil {
 		return err
 	}
-	binary, _ = filepath.EvalSymlinks(binary)
+	binary = stableLauncherPath(binary, os.Getenv("PATH"))
 	agents := []string{}
 	for _, name := range []string{"codex", "claude"} {
 		if _, err := launcher.Resolve(name); err == nil {
@@ -39,21 +39,8 @@ func Setup() error {
 	if _, err := exec.LookPath("tmux"); err != nil {
 		fmt.Fprintln(os.Stderr, "warning: tmux was not found; install it with: brew install tmux")
 	}
-	if err := os.MkdirAll(config.ShimDir(), 0700); err != nil {
+	if err := installShims(binary, agents); err != nil {
 		return err
-	}
-	for _, agent := range agents {
-		shim := "#!/bin/sh\nexec " + shellQuote(binary) + " launch " + agent + " \"$@\"\n"
-		if err := atomicWrite(filepath.Join(config.ShimDir(), agent), []byte(shim), 0700); err != nil {
-			return err
-		}
-	}
-	for _, candidate := range []string{"codex", "claude"} {
-		if !hasAgent(agents, candidate) {
-			if err := os.Remove(filepath.Join(config.ShimDir(), candidate)); err != nil && !os.IsNotExist(err) {
-				return err
-			}
-		}
 	}
 	if err := addPathBlock(); err != nil {
 		return err
@@ -71,6 +58,54 @@ func Setup() error {
 	fmt.Println("Setup complete. Run: source ~/.zshrc")
 	fmt.Println()
 	Doctor()
+	return nil
+}
+
+func stableLauncherPath(binary, pathEnv string) string {
+	if absolute, err := filepath.Abs(binary); err == nil {
+		binary = absolute
+	}
+	binary = filepath.Clean(binary)
+	self, err := os.Stat(binary)
+	if err != nil {
+		return binary
+	}
+	// Keep a PATH symlink only when it currently resolves to this executable.
+	// The generated scripts then use that absolute path without a runtime PATH lookup.
+	for _, dir := range filepath.SplitList(pathEnv) {
+		if !filepath.IsAbs(dir) {
+			continue
+		}
+		candidate := filepath.Clean(filepath.Join(dir, "panestra"))
+		info, err := os.Stat(candidate)
+		if err != nil || !info.Mode().IsRegular() || info.Mode()&0111 == 0 || !os.SameFile(self, info) {
+			continue
+		}
+		link, err := os.Lstat(candidate)
+		if err == nil && link.Mode()&os.ModeSymlink != 0 {
+			return candidate
+		}
+	}
+	return binary
+}
+
+func installShims(binary string, agents []string) error {
+	if err := os.MkdirAll(config.ShimDir(), 0700); err != nil {
+		return err
+	}
+	for _, agent := range agents {
+		shim := "#!/bin/sh\nexec " + shellQuote(binary) + " launch " + agent + " \"$@\"\n"
+		if err := atomicWrite(filepath.Join(config.ShimDir(), agent), []byte(shim), 0700); err != nil {
+			return err
+		}
+	}
+	for _, candidate := range []string{"codex", "claude"} {
+		if !hasAgent(agents, candidate) {
+			if err := os.Remove(filepath.Join(config.ShimDir(), candidate)); err != nil && !os.IsNotExist(err) {
+				return err
+			}
+		}
+	}
 	return nil
 }
 
