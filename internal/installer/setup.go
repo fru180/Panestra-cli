@@ -39,18 +39,11 @@ func Setup() error {
 	if _, err := exec.LookPath("tmux"); err != nil {
 		fmt.Fprintln(os.Stderr, "warning: tmux was not found; install it with: brew install tmux")
 	}
-	if err := installShims(binary, agents); err != nil {
+	changes, err := prepareSetup(binary, agents)
+	if err != nil {
 		return err
 	}
-	if err := addPathBlock(); err != nil {
-		return err
-	}
-	if _, err := os.Stat(config.Path()); os.IsNotExist(err) {
-		if err := config.Save(config.Default()); err != nil {
-			return err
-		}
-	}
-	if err := installAdapters(binary, agents); err != nil {
+	if err := applyFileChanges(changes); err != nil {
 		return err
 	}
 	fmt.Println("Panestra CLI displays your latest prompt on screen.")
@@ -90,23 +83,45 @@ func stableLauncherPath(binary, pathEnv string) string {
 }
 
 func installShims(binary string, agents []string) error {
-	if err := os.MkdirAll(config.ShimDir(), 0700); err != nil {
-		return err
-	}
+	return applyFileChanges(prepareShimChanges(binary, agents))
+}
+
+func prepareShimChanges(binary string, agents []string) []fileChange {
+	var changes []fileChange
 	for _, agent := range agents {
 		shim := "#!/bin/sh\nexec " + shellQuote(binary) + " launch " + agent + " \"$@\"\n"
-		if err := atomicWrite(filepath.Join(config.ShimDir(), agent), []byte(shim), 0700); err != nil {
-			return err
-		}
+		changes = append(changes, fileChange{path: filepath.Join(config.ShimDir(), agent), data: []byte(shim), mode: 0700})
 	}
 	for _, candidate := range []string{"codex", "claude"} {
 		if !hasAgent(agents, candidate) {
-			if err := os.Remove(filepath.Join(config.ShimDir(), candidate)); err != nil && !os.IsNotExist(err) {
-				return err
-			}
+			changes = append(changes, fileChange{path: filepath.Join(config.ShimDir(), candidate), remove: true})
 		}
 	}
-	return nil
+	return changes
+}
+
+func prepareSetup(binary string, agents []string) ([]fileChange, error) {
+	changes := prepareShimChanges(binary, agents)
+	pathChange, err := preparePathBlock()
+	if err != nil {
+		return nil, err
+	}
+	changes = append(changes, pathChange)
+	if _, err := os.Stat(config.Path()); err != nil {
+		if !os.IsNotExist(err) {
+			return nil, err
+		}
+		content, err := config.Encode(config.Default())
+		if err != nil {
+			return nil, err
+		}
+		changes = append(changes, fileChange{path: config.Path(), data: content, mode: 0600})
+	}
+	adapterChanges, err := prepareAdapters(binary, agents)
+	if err != nil {
+		return nil, err
+	}
+	return append(changes, adapterChanges...), nil
 }
 
 func atomicWrite(path string, data []byte, mode os.FileMode) error {

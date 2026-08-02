@@ -47,13 +47,21 @@ func Load() Config {
 	return c
 }
 
+func Encode(c Config) ([]byte, error) {
+	var content bytes.Buffer
+	if err := toml.NewEncoder(&content).Encode(c); err != nil {
+		return nil, err
+	}
+	return content.Bytes(), nil
+}
+
 func Save(c Config) error {
+	content, err := Encode(c)
+	if err != nil {
+		return err
+	}
 	if err := os.MkdirAll(filepath.Dir(Path()), 0700); err != nil {
 		return err
 	}
-	var content bytes.Buffer
-	if err := toml.NewEncoder(&content).Encode(c); err != nil {
-		return err
-	}
-	return os.WriteFile(Path(), content.Bytes(), 0600)
+	return os.WriteFile(Path(), content, 0600)
 }
