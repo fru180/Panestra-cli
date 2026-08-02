@@ -72,7 +72,38 @@ func uninstallAdapters() error {
 
 func adapterInstalled(path string) bool {
 	b, err := os.ReadFile(path)
-	return err == nil && strings.Contains(string(b), filepath.Join("panestra-cli", "adapters", "panestra-hook"))
+	if err != nil {
+		return false
+	}
+	var root map[string]any
+	if err := json.Unmarshal(b, &root); err != nil {
+		return false
+	}
+	hooks, ok := root["hooks"].(map[string]any)
+	if !ok {
+		return false
+	}
+	groups, ok := hooks["UserPromptSubmit"].([]any)
+	if !ok {
+		return false
+	}
+	for _, raw := range groups {
+		group, ok := raw.(map[string]any)
+		if !ok {
+			continue
+		}
+		handlers, ok := group["hooks"].([]any)
+		if !ok {
+			continue
+		}
+		for _, rawHandler := range handlers {
+			handler, ok := rawHandler.(map[string]any)
+			if ok && managedHook(handler) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func mergeHook(path string, remove bool) error {
@@ -143,8 +174,7 @@ func prepareHookChange(path string, remove bool) (fileChange, bool, error) {
 				kept = append(kept, hr)
 				continue
 			}
-			cmd, _ := h["command"].(string)
-			if !strings.Contains(cmd, filepath.Join("panestra-cli", "adapters", "panestra-hook")) {
+			if !managedHook(h) {
 				kept = append(kept, hr)
 			} else {
 				changed = true
@@ -196,6 +226,12 @@ func cloneObject(value map[string]any) map[string]any {
 		copy[key] = item
 	}
 	return copy
+}
+
+func managedHook(handler map[string]any) bool {
+	typeName, typeOK := handler["type"].(string)
+	command, commandOK := handler["command"].(string)
+	return typeOK && typeName == "command" && commandOK && command == shellQuote(hookScriptPath())
 }
 
 func shellQuote(s string) string { return "'" + strings.ReplaceAll(s, "'", "'\\''") + "'" }
