@@ -123,7 +123,7 @@ jobs:
             printf 'Unexpected archive contents:\n%s\n' "$contents" >&2
             exit 1
           fi
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: release-${{ matrix.arch }}
           path: panestra-cli_Darwin_*.tar.gz
@@ -163,7 +163,7 @@ jobs:
           python3 -m json.tool panestra-cli_Darwin_arm64.spdx.json >/dev/null
           python3 -m json.tool panestra-cli_Darwin_x86_64.spdx.json >/dev/null
           shasum -a 256 panestra-cli_Darwin_*.tar.gz panestra-cli_Darwin_*.spdx.json > checksums.txt
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: release-bundle
           path: |
